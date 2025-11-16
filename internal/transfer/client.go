@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -57,15 +58,35 @@ func (c *Client) UploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 			return fmt.Errorf("block %s exceeds file size", block.ID)
 		}
 		chunk := data[offset:end]
-		for _, replica := range replicas {
-			if err := c.uploadReplica(block.ID, replica, chunk); err != nil {
-				return err
-			}
+		if err := c.uploadBlock(block.ID, replicas, chunk); err != nil {
+			return err
 		}
 		offset = end
 	}
 	if offset != len(data) {
 		return fmt.Errorf("plan left %d bytes unused", len(data)-offset)
+	}
+	return nil
+}
+
+func (c *Client) uploadBlock(blockID string, replicas []protocol.BlockReplica, data []byte) error {
+	var successes int
+	var lastErr error
+	for _, replica := range replicas {
+		if err := c.uploadReplica(blockID, replica, data); err != nil {
+			if lastErr == nil {
+				lastErr = err
+			}
+			log.Printf("transfer: failed to store block %s on %s: %v", blockID, replica.DataServer, err)
+			continue
+		}
+		successes++
+	}
+	if successes != len(replicas) {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("replica count mismatch: stored %d/%d copies", successes, len(replicas))
+		}
+		return fmt.Errorf("upload block %s: %w", blockID, lastErr)
 	}
 	return nil
 }
@@ -149,6 +170,7 @@ func (c *Client) fetchBlockWithFailover(block protocol.BlockRef) ([]byte, error)
 			return chunk, nil
 		}
 		lastErr = err
+		log.Printf("transfer: failed to download block %s from %s: %v", block.ID, replica.DataServer, err)
 	}
 	return nil, fmt.Errorf("retrieve block %s: %w", block.ID, lastErr)
 }

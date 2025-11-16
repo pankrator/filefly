@@ -81,13 +81,25 @@ REQ
 Repeat this for each block listed in the metadata response, substituting the
 correct payload for each chunk. Blocks written to the data server are persisted
 as individual files below the configured storage directory, so removing a block
-is as simple as deleting that file from the filesystem.
+is as simple as deleting that file from the filesystem. Once every block has
+been stored successfully call `complete_file` with the same metadata document to
+mark the upload as finished:
+
+```bash
+cat <<'REQ' | nc localhost 9000
+{"command":"complete_file","metadata":{"name":"hello.txt","total_size":8,"replicas":1,"blocks":[{"id":"hello.txt-0","size":8,"replicas":[{"data_server":":9001"}]}]}}
+REQ
+```
+
+Until the completion call the metadata server keeps the plan transient so the
+file does not appear in listings before its data is fully replicated.
 
 ## Uploading files with the CLI client
 
 The `cmd/client` helper automates the metadata and data server interactions. It
-requests an upload plan from the metadata server and then pushes each chunk to
-the data servers listed in that plan.
+requests an upload plan from the metadata server, pushes each chunk to the data
+servers listed in that plan, and only then finalizes the metadata entry with
+`complete_file`.
 
 ```bash
 go run ./cmd/client --metadata-server :9000 --file ./hello.txt

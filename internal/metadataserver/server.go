@@ -103,6 +103,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		switch req.Command {
 		case "store_file":
 			resp = s.storeFile(req)
+		case "complete_file":
+			resp = s.completeFile(req)
 		case "fetch_file":
 			resp = s.fetchFile(req)
 		case "get_metadata":
@@ -130,14 +132,14 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	if req.FileName == "" {
 		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
 	}
-	meta, err := s.planAndSaveFile(req.FileName, req)
+	meta, err := s.planFile(req.FileName, req)
 	if err != nil {
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
 	return protocol.MetadataResponse{Status: "ok", Metadata: meta}
 }
 
-func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*protocol.FileMetadata, error) {
+func (s *Server) planFile(name string, req protocol.MetadataRequest) (*protocol.FileMetadata, error) {
 	totalSize, err := s.determineFileSize(req)
 	if err != nil {
 		return nil, err
@@ -146,10 +148,58 @@ func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*pr
 	if err != nil {
 		return nil, err
 	}
-	if err := s.store.Save(*meta); err != nil {
-		return nil, err
-	}
 	return meta, nil
+}
+
+func (s *Server) completeFile(req protocol.MetadataRequest) protocol.MetadataResponse {
+	if req.Metadata == nil {
+		return protocol.MetadataResponse{Status: "error", Error: "missing metadata"}
+	}
+	meta := *req.Metadata
+	if meta.Name == "" {
+		if req.FileName != "" {
+			meta.Name = req.FileName
+		} else {
+			return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
+		}
+	}
+	if err := validateMetadata(meta); err != nil {
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
+	}
+	if err := s.store.Save(meta); err != nil {
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
+	}
+	return protocol.MetadataResponse{Status: "ok", Metadata: &meta}
+}
+
+func validateMetadata(meta protocol.FileMetadata) error {
+	if meta.Name == "" {
+		return fmt.Errorf("metadata missing name")
+	}
+	if meta.TotalSize < 0 {
+		return fmt.Errorf("metadata total_size cannot be negative")
+	}
+	var total int
+	for _, block := range meta.Blocks {
+		if block.ID == "" {
+			return fmt.Errorf("metadata block missing id")
+		}
+		if block.Size < 0 {
+			return fmt.Errorf("metadata block %s has negative size", block.ID)
+		}
+		replicas := len(normalizeBlockReplicas(block))
+		if block.Size > 0 && replicas == 0 {
+			return fmt.Errorf("metadata block %s has no replicas", block.ID)
+		}
+		if block.Size > 0 && meta.Replicas > 0 && replicas != meta.Replicas {
+			return fmt.Errorf("metadata block %s replica mismatch: have %d want %d", block.ID, replicas, meta.Replicas)
+		}
+		total += block.Size
+	}
+	if total != meta.TotalSize {
+		return fmt.Errorf("metadata size mismatch: blocks total %d but metadata reports %d", total, meta.TotalSize)
+	}
+	return nil
 }
 
 func (s *Server) determineFileSize(req protocol.MetadataRequest) (int, error) {

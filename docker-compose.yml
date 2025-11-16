@@ -24,6 +24,7 @@ services:
   metadata:
     image: golang:1.21
     working_dir: /app
+    # Metadata server issues upload plans and waits for clients to finalize them with complete_file.
     command: >-
       go run ./cmd/metadataserver
       --addr :9100

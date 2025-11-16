@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -122,6 +123,7 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		replicas = value
 	}
 
+	log.Printf("ui: upload request for %s (%d bytes, replicas=%d)", name, len(data), replicas)
 	meta, err := s.metadata.planFile(name, len(data), replicas)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("plan file: %v", err), http.StatusInternalServerError)
@@ -138,6 +140,7 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("ui: upload completed for %s (%d blocks)", meta.Name, len(meta.Blocks))
 	respondJSON(w, map[string]any{"file": meta})
 }
 
@@ -175,10 +178,12 @@ func (s *uiServer) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		respondJSON(w, map[string]any{"file": meta})
 	case http.MethodDelete:
+		log.Printf("ui: delete requested for %s", name)
 		if err := s.metadata.deleteFile(name); err != nil {
 			s.handleMetadataError(w, r, err)
 			return
 		}
+		log.Printf("ui: deleted %s", name)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -192,11 +197,14 @@ func (s *uiServer) handleDownload(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
+	log.Printf("ui: downloading %s (%d blocks)", meta.Name, len(meta.Blocks))
 	data, err := s.transfer.DownloadFile(meta, s.downloadConcurrency)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("download file: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("ui: download complete for %s (%d bytes)", meta.Name, len(data))
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))

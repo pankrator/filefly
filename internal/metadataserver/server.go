@@ -85,7 +85,12 @@ func (s *Server) validateConfig() error {
 }
 
 func (s *Server) handleConn(conn net.Conn) {
-	defer conn.Close()
+	remote := conn.RemoteAddr().String()
+	log.Printf("metadata: accepted connection from %s", remote)
+	defer func() {
+		log.Printf("metadata: closed connection from %s", remote)
+		conn.Close()
+	}()
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	enc := json.NewEncoder(conn)
 
@@ -136,6 +141,7 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	if err != nil {
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
+	log.Printf("metadata: planned upload for %s (%d bytes across %d blocks, replicas=%d)", meta.Name, meta.TotalSize, len(meta.Blocks), meta.Replicas)
 	return protocol.MetadataResponse{Status: "ok", Metadata: meta}
 }
 
@@ -169,6 +175,7 @@ func (s *Server) completeFile(req protocol.MetadataRequest) protocol.MetadataRes
 	if err := s.store.Save(meta); err != nil {
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
+	log.Printf("metadata: stored metadata for %s (%d blocks)", meta.Name, len(meta.Blocks))
 	return protocol.MetadataResponse{Status: "ok", Metadata: &meta}
 }
 
@@ -220,6 +227,7 @@ func (s *Server) fetchFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	if req.FileName == "" {
 		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
 	}
+	log.Printf("metadata: fetching %s for caller", req.FileName)
 	data, meta, err := s.FetchFileBytes(req.FileName)
 	if err != nil {
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
@@ -248,6 +256,7 @@ func (s *Server) deleteFile(req protocol.MetadataRequest) protocol.MetadataRespo
 		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
 	}
 
+	log.Printf("metadata: deleting %s", req.FileName)
 	meta, err := s.store.BeginDelete(req.FileName)
 	if err != nil {
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
@@ -255,10 +264,12 @@ func (s *Server) deleteFile(req protocol.MetadataRequest) protocol.MetadataRespo
 
 	if err := s.dataClient.DeleteFile(meta); err != nil {
 		s.store.CancelDelete(req.FileName)
+		log.Printf("metadata: delete %s failed, rolled back metadata: %v", req.FileName, err)
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
 
 	s.store.CompleteDelete(req.FileName)
+	log.Printf("metadata: deleted %s", req.FileName)
 	return protocol.MetadataResponse{Status: "ok"}
 }
 

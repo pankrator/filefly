@@ -70,7 +70,7 @@ func (m *dataHealthMonitor) run() {
 }
 
 func (m *dataHealthMonitor) checkAll() {
-	for _, addr := range m.servers {
+	for _, addr := range m.snapshotServers() {
 		m.check(addr)
 	}
 }
@@ -120,4 +120,32 @@ func (m *dataHealthMonitor) List() []protocol.DataServerHealth {
 		result = append(result, protocol.DataServerHealth{Address: addr})
 	}
 	return result
+}
+
+func (m *dataHealthMonitor) EnsureServer(addr string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	for _, existing := range m.servers {
+		if existing == addr {
+			m.mu.Unlock()
+			return
+		}
+	}
+	m.servers = append(m.servers, addr)
+	m.mu.Unlock()
+}
+
+func (m *dataHealthMonitor) CheckNow(addr string) {
+	if m == nil || addr == "" {
+		return
+	}
+	go m.check(addr)
+}
+
+func (m *dataHealthMonitor) snapshotServers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.servers...)
 }

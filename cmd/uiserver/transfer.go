@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -15,10 +16,10 @@ import (
 
 const replicaFetchTimeout = 5 * time.Second
 
+var dataServerConns = newConnCache()
+
 func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 	offset := 0
-	conns := newConnCache()
-	defer conns.CloseAll()
 	for _, block := range blocks {
 		replicas := normalizeBlockReplicas(block)
 		if len(replicas) == 0 {
@@ -30,7 +31,7 @@ func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 		}
 		chunk := data[offset:end]
 		for _, replica := range replicas {
-			if err := uploadReplica(block.ID, replica, chunk, conns); err != nil {
+			if err := uploadReplica(block.ID, replica, chunk, dataServerConns); err != nil {
 				return err
 			}
 		}
@@ -43,22 +44,26 @@ func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 }
 
 func uploadReplica(blockID string, replica protocol.BlockReplica, data []byte, cache *connCache) error {
-	conn, err := cache.Get(replica.DataServer)
+	conn, release, err := cache.Acquire(replica.DataServer)
 	if err != nil {
 		return fmt.Errorf("connect to data server %s: %w", replica.DataServer, err)
 	}
+	drop := false
+	defer func() {
+		release(drop)
+	}()
 	req := protocol.DataServerRequest{
 		Command: "store",
 		BlockID: blockID,
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
 	if err := conn.enc.Encode(req); err != nil {
-		cache.Drop(replica.DataServer)
+		drop = true
 		return fmt.Errorf("send store to %s: %w", replica.DataServer, err)
 	}
 	var resp protocol.DataServerResponse
 	if err := conn.dec.Decode(&resp); err != nil {
-		cache.Drop(replica.DataServer)
+		drop = true
 		return fmt.Errorf("decode response from %s: %w", replica.DataServer, err)
 	}
 	if resp.Status != "ok" {
@@ -71,12 +76,15 @@ func uploadReplica(blockID string, replica protocol.BlockReplica, data []byte, c
 }
 
 type cachedConn struct {
-	enc  *json.Encoder
-	dec  *json.Decoder
-	conn net.Conn
+	enc   *json.Encoder
+	dec   *json.Decoder
+	conn  net.Conn
+	mu    sync.Mutex
+	alive bool
 }
 
 type connCache struct {
+	mu    sync.Mutex
 	conns map[string]*cachedConn
 }
 
@@ -84,33 +92,64 @@ func newConnCache() *connCache {
 	return &connCache{conns: make(map[string]*cachedConn)}
 }
 
-func (c *connCache) Get(addr string) (*cachedConn, error) {
-	if conn, ok := c.conns[addr]; ok {
-		return conn, nil
-	}
-	netConn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	cached := &cachedConn{
-		conn: netConn,
-		enc:  json.NewEncoder(netConn),
-		dec:  json.NewDecoder(bufio.NewReader(netConn)),
-	}
-	c.conns[addr] = cached
-	return cached, nil
-}
+func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
+	for {
+		c.mu.Lock()
+		conn, ok := c.conns[addr]
+		if !ok {
+			netConn, err := net.Dial("tcp", addr)
+			if err != nil {
+				c.mu.Unlock()
+				return nil, nil, err
+			}
+			conn = &cachedConn{
+				conn:  netConn,
+				enc:   json.NewEncoder(netConn),
+				dec:   json.NewDecoder(bufio.NewReader(netConn)),
+				alive: true,
+			}
+			c.conns[addr] = conn
+		}
+		c.mu.Unlock()
 
-func (c *connCache) Drop(addr string) {
-	if conn, ok := c.conns[addr]; ok {
-		_ = conn.conn.Close()
-		delete(c.conns, addr)
+		conn.mu.Lock()
+		if !conn.alive {
+			conn.mu.Unlock()
+			continue
+		}
+
+		release := func(drop bool) {
+			if drop && conn.alive {
+				conn.alive = false
+				_ = conn.conn.Close()
+				c.mu.Lock()
+				if c.conns[addr] == conn {
+					delete(c.conns, addr)
+				}
+				c.mu.Unlock()
+			}
+			conn.mu.Unlock()
+		}
+
+		return conn, release, nil
 	}
 }
 
 func (c *connCache) CloseAll() {
-	for addr := range c.conns {
-		c.Drop(addr)
+	c.mu.Lock()
+	conns := make([]*cachedConn, 0, len(c.conns))
+	for addr, conn := range c.conns {
+		delete(c.conns, addr)
+		conns = append(conns, conn)
+	}
+	c.mu.Unlock()
+	for _, conn := range conns {
+		conn.mu.Lock()
+		if conn.alive {
+			conn.alive = false
+			_ = conn.conn.Close()
+		}
+		conn.mu.Unlock()
 	}
 }
 

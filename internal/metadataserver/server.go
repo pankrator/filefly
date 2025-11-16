@@ -31,6 +31,8 @@ type Server struct {
 	rrNext int
 }
 
+const replicaFetchTimeout = 5 * time.Second
+
 type diskSnapshot struct {
 	Files map[string]protocol.FileMetadata `json:"files"`
 }
@@ -376,24 +378,29 @@ func (s *Server) FetchFileBytes(name string) ([]byte, *protocol.FileMetadata, er
 	}
 	buf := make([]byte, 0, meta.TotalSize)
 	for _, block := range meta.Blocks {
-		replicas := normalizeBlockReplicas(block)
-		if len(replicas) == 0 {
-			return nil, nil, fmt.Errorf("block %s has no replicas", block.ID)
-		}
-		var chunk []byte
-		var lastErr error
-		for _, replica := range replicas {
-			chunk, lastErr = s.pullBlock(replica.DataServer, block.ID)
-			if lastErr == nil {
-				break
-			}
-		}
-		if lastErr != nil {
-			return nil, nil, fmt.Errorf("retrieve block %s: %w", block.ID, lastErr)
+		chunk, err := s.fetchBlockWithFailover(block)
+		if err != nil {
+			return nil, nil, err
 		}
 		buf = append(buf, chunk...)
 	}
 	return buf, &meta, nil
+}
+
+func (s *Server) fetchBlockWithFailover(block protocol.BlockRef) ([]byte, error) {
+	replicas := normalizeBlockReplicas(block)
+	if len(replicas) == 0 {
+		return nil, fmt.Errorf("block %s has no replicas", block.ID)
+	}
+	var lastErr error
+	for _, replica := range replicas {
+		chunk, err := s.pullBlock(replica.DataServer, block.ID)
+		if err == nil {
+			return chunk, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("retrieve block %s: %w", block.ID, lastErr)
 }
 
 func (s *Server) uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
@@ -460,11 +467,13 @@ func (s *Server) nextDataServer() string {
 }
 
 func (s *Server) pullBlock(addr, blockID string) ([]byte, error) {
-	conn, err := net.Dial("tcp", addr)
+	dialer := &net.Dialer{Timeout: replicaFetchTimeout}
+	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("connect to data server %s: %w", addr, err)
 	}
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(replicaFetchTimeout))
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(bufio.NewReader(conn))

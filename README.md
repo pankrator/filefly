@@ -160,6 +160,10 @@ removed.
   disable automatic persistence.
 * **download-concurrency** – UI server flag that limits how many block replicas
   are fetched in parallel while reconstructing a file.
+* **metadata health monitor** – the metadata server continuously pings the data
+  servers it knows about. Healthy servers are checked on a tight loop, while
+  unhealthy servers are retried periodically so they can be marked healthy again
+  as soon as they respond to a ping.
 
 This simple implementation was built for educational purposes. It should be
 straightforward to extend the servers with authentication, replication, or other

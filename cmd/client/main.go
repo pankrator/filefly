@@ -34,6 +34,7 @@ func main() {
 		log.Fatalf("read file: %v", err)
 	}
 
+	log.Printf("requesting upload plan for %s (%d bytes, replicas=%d)", *fileName, len(data), *replicas)
 	plan, err := requestPlan(*metadataAddr, *fileName, len(data), *replicas)
 	if err != nil {
 		log.Fatalf("request plan: %v", err)
@@ -43,6 +44,7 @@ func main() {
 		log.Fatalf("metadata server did not return metadata for %s", *fileName)
 	}
 
+	log.Printf("received plan for %s: %d blocks", plan.Metadata.Name, len(plan.Metadata.Blocks))
 	if len(plan.Metadata.Blocks) == 0 {
 		log.Printf("file %s has no data to upload", plan.Metadata.Name)
 		return
@@ -55,6 +57,7 @@ func main() {
 		log.Fatalf("upload blocks: %v", err)
 	}
 
+	log.Printf("finalizing metadata for %s", plan.Metadata.Name)
 	if err := completeUpload(*metadataAddr, plan.Metadata); err != nil {
 		log.Fatalf("finalize upload: %v", err)
 	}

@@ -55,7 +55,12 @@ func (s *Server) Listen() error {
 }
 
 func (s *Server) handleConn(conn net.Conn) {
-	defer conn.Close()
+	remote := conn.RemoteAddr().String()
+	log.Printf("dataserver: accepted connection from %s", remote)
+	defer func() {
+		log.Printf("dataserver: closed connection from %s", remote)
+		conn.Close()
+	}()
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	enc := json.NewEncoder(conn)
 
@@ -105,7 +110,7 @@ func (s *Server) store(req protocol.DataServerRequest) protocol.DataServerRespon
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("write block: %v", err)}
 	}
-
+	log.Printf("dataserver: stored block %s (%d bytes)", req.BlockID, len(data))
 	return protocol.DataServerResponse{Status: "ok"}
 }
 
@@ -124,7 +129,7 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 		}
 		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("read block: %v", err)}
 	}
-
+	log.Printf("dataserver: retrieved block %s (%d bytes)", req.BlockID, len(data))
 	return protocol.DataServerResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(data)}
 }
 
@@ -142,7 +147,7 @@ func (s *Server) delete(req protocol.DataServerRequest) protocol.DataServerRespo
 		}
 		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("delete block: %v", err)}
 	}
-
+	log.Printf("dataserver: deleted block %s", req.BlockID)
 	return protocol.DataServerResponse{Status: "ok"}
 }
 

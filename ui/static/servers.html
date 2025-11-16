@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FileFly · Data servers</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>FileFly</h1>
+      <p class="subtitle">Monitor data server health</p>
+      <nav class="nav-links">
+        <a href="/">Files</a>
+        <a href="/servers.html" class="active">Data servers</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Data server health</h2>
+          <button id="refresh-servers" type="button">Refresh</button>
+        </div>
+        <div class="table-wrapper">
+          <table class="health-table">
+            <thead>
+              <tr>
+                <th>Address</th>
+                <th>Status</th>
+                <th>Last pong</th>
+                <th>Last checked</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="servers-body"></tbody>
+          </table>
+        </div>
+        <p id="servers-empty" class="empty-state hidden">No data servers configured.</p>
+        <p id="servers-status" class="status"></p>
+      </section>
+    </main>
+
+    <script src="servers.js" type="module"></script>
+  </body>
+</html>

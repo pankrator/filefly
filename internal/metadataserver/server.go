@@ -24,11 +24,13 @@ type Server struct {
 	store      metadataStore
 	persister  *diskPersister
 	dataClient *dataServerClient
+	health     *dataHealthMonitor
 }
 
 // New creates a metadata server instance.
 func New(addr string, blockSize int, dataServers []string, persistPath string, persistFreq time.Duration) *Server {
 	selector := newRoundRobinSelector(dataServers)
+	client := newDataServerClient(replicaFetchTimeout)
 	return &Server{
 		addr:        addr,
 		blockSize:   blockSize,
@@ -37,7 +39,8 @@ func New(addr string, blockSize int, dataServers []string, persistPath string, p
 		planner:     newBlockPlanner(blockSize, selector),
 		store:       newMetadataStore(),
 		persister:   newDiskPersister(persistPath),
-		dataClient:  newDataServerClient(replicaFetchTimeout),
+		dataClient:  client,
+		health:      newDataHealthMonitor(dataServers, client, defaultHealthCheckInterval),
 	}
 }
 
@@ -50,6 +53,10 @@ func (s *Server) Listen() error {
 		return fmt.Errorf("metadata bootstrap: %w", err)
 	}
 	s.persister.Start(s.store, s.persistFreq)
+	if s.health != nil {
+		s.health.Start()
+		defer s.health.Stop()
+	}
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -102,6 +109,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = s.getMetadata(req)
 		case "list_files":
 			resp = s.listFilesResponse()
+		case "list_data_servers":
+			resp = s.listDataServersResponse()
 		case "delete_file":
 			resp = s.deleteFile(req)
 		case "ping":
@@ -208,6 +217,14 @@ func (s *Server) ListFiles() []protocol.FileMetadata {
 	return s.store.List()
 }
 
+// ListDataServers returns the latest health information for data servers.
+func (s *Server) ListDataServers() []protocol.DataServerHealth {
+	if s.health == nil {
+		return nil
+	}
+	return s.health.List()
+}
+
 // FetchFileBytes downloads a full file from the data servers.
 func (s *Server) FetchFileBytes(name string) ([]byte, *protocol.FileMetadata, error) {
 	meta, ok := s.store.Get(name)
@@ -224,4 +241,12 @@ func (s *Server) FetchFileBytes(name string) ([]byte, *protocol.FileMetadata, er
 	}
 	copy := meta
 	return buf, &copy, nil
+}
+
+func (s *Server) listDataServersResponse() protocol.MetadataResponse {
+	servers := s.ListDataServers()
+	if servers == nil {
+		servers = []protocol.DataServerHealth{}
+	}
+	return protocol.MetadataResponse{Status: "ok", Servers: servers}
 }

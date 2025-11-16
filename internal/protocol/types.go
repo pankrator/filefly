@@ -1,5 +1,7 @@
 package protocol
 
+import "time"
+
 // DataServerRequest represents a message sent to a data server for storing or
 // retrieving a block.
 type DataServerRequest struct {
@@ -13,6 +15,7 @@ type DataServerResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 	Data   string `json:"data,omitempty"`
+	Pong   bool   `json:"pong,omitempty"`
 }
 
 // MetadataRequest is consumed by the metadata server.
@@ -49,9 +52,19 @@ type FileMetadata struct {
 
 // MetadataResponse is returned by the metadata server.
 type MetadataResponse struct {
-	Status   string         `json:"status"`
-	Error    string         `json:"error,omitempty"`
-	Metadata *FileMetadata  `json:"metadata,omitempty"`
-	Data     string         `json:"data,omitempty"`
-	Files    []FileMetadata `json:"files,omitempty"`
+	Status   string             `json:"status"`
+	Error    string             `json:"error,omitempty"`
+	Metadata *FileMetadata      `json:"metadata,omitempty"`
+	Data     string             `json:"data,omitempty"`
+	Files    []FileMetadata     `json:"files,omitempty"`
+	Servers  []DataServerHealth `json:"servers,omitempty"`
+}
+
+// DataServerHealth describes the last known health of a data server.
+type DataServerHealth struct {
+	Address     string    `json:"address"`
+	Healthy     bool      `json:"healthy"`
+	LastPong    time.Time `json:"last_pong,omitempty"`
+	LastChecked time.Time `json:"last_checked,omitempty"`
+	Error       string    `json:"error,omitempty"`
 }

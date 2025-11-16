@@ -28,6 +28,14 @@ func (c *metadataClient) listFiles() ([]protocol.FileMetadata, error) {
 	return resp.Files, nil
 }
 
+func (c *metadataClient) listDataServers() ([]protocol.DataServerHealth, error) {
+	resp, err := c.request(protocol.MetadataRequest{Command: "list_data_servers"})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Servers, nil
+}
+
 func (c *metadataClient) planFile(name string, size, replicas int) (*protocol.FileMetadata, error) {
 	req := protocol.MetadataRequest{
 		Command:  "store_file",

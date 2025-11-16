@@ -29,6 +29,29 @@ header h1 {
   margin-top: 0.25rem;
 }
 
+.nav-links {
+  display: inline-flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  border: 1px solid #e4e7ec;
+  border-radius: 999px;
+  padding: 0.25rem;
+  background: #fff;
+}
+
+.nav-links a {
+  text-decoration: none;
+  color: #475467;
+  font-weight: 600;
+  padding: 0.35rem 1rem;
+  border-radius: 999px;
+}
+
+.nav-links a.active {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
 main {
   display: grid;
   gap: 1.5rem;
@@ -165,6 +188,10 @@ button:disabled {
   font-family: "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
 }
 
+.mono {
+  font-family: "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -203,6 +230,50 @@ input[type="number"] {
 
 .hidden {
   display: none;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.health-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.health-table th,
+.health-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #e4e7ec;
+}
+
+.health-table th {
+  font-size: 0.85rem;
+  color: #475467;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.health-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.75rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.health-pill.healthy {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.health-pill.unhealthy {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
 @media (min-width: 768px) {

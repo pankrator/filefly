@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
 	"sync"
 
 	"filefly/internal/protocol"
@@ -95,27 +96,39 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	if req.FileName == "" {
 		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
 	}
-	if s.blockSize <= 0 {
-		return protocol.MetadataResponse{Status: "error", Error: "invalid block size"}
-	}
-
-	totalSize, err := s.determineFileSize(req)
+	meta, err := s.planAndSaveFile(req.FileName, req)
 	if err != nil {
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
+	return protocol.MetadataResponse{Status: "ok", Metadata: meta}
+}
 
-	blocks := s.planBlocks(req.FileName, totalSize)
+func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*protocol.FileMetadata, error) {
+	totalSize, err := s.determineFileSize(req)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := s.planFileMetadata(name, totalSize)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.files[name] = *meta
+	s.mu.Unlock()
+	return meta, nil
+}
+
+func (s *Server) planFileMetadata(name string, totalSize int) (*protocol.FileMetadata, error) {
+	if s.blockSize <= 0 {
+		return nil, fmt.Errorf("invalid block size")
+	}
+	blocks := s.planBlocks(name, totalSize)
 	meta := protocol.FileMetadata{
-		Name:      req.FileName,
+		Name:      name,
 		TotalSize: totalSize,
 		Blocks:    blocks,
 	}
-
-	s.mu.Lock()
-	s.files[req.FileName] = meta
-	s.mu.Unlock()
-
-	return protocol.MetadataResponse{Status: "ok", Metadata: &meta}
+	return &meta, nil
 }
 
 func (s *Server) determineFileSize(req protocol.MetadataRequest) (int, error) {
@@ -158,24 +171,11 @@ func (s *Server) fetchFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	if req.FileName == "" {
 		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
 	}
-
-	s.mu.RLock()
-	meta, ok := s.files[req.FileName]
-	s.mu.RUnlock()
-	if !ok {
-		return protocol.MetadataResponse{Status: "error", Error: "file not found"}
+	data, meta, err := s.FetchFileBytes(req.FileName)
+	if err != nil {
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
-
-	buf := make([]byte, 0, meta.TotalSize)
-	for _, block := range meta.Blocks {
-		data, err := s.pullBlock(block.DataServer, block.ID)
-		if err != nil {
-			return protocol.MetadataResponse{Status: "error", Error: err.Error()}
-		}
-		buf = append(buf, data...)
-	}
-
-	return protocol.MetadataResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(buf), Metadata: &meta}
+	return protocol.MetadataResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(data), Metadata: meta}
 }
 
 func (s *Server) getMetadata(req protocol.MetadataRequest) protocol.MetadataResponse {
@@ -191,6 +191,109 @@ func (s *Server) getMetadata(req protocol.MetadataRequest) protocol.MetadataResp
 	}
 
 	return protocol.MetadataResponse{Status: "ok", Metadata: &meta}
+}
+
+// ListFiles returns all known metadata entries sorted by name.
+func (s *Server) ListFiles() []protocol.FileMetadata {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	files := make([]protocol.FileMetadata, 0, len(s.files))
+	for _, meta := range s.files {
+		files = append(files, meta)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Name < files[j].Name
+	})
+	return files
+}
+
+// StoreFileBytes stores a file and uploads its blocks to the data servers.
+func (s *Server) StoreFileBytes(name string, data []byte) (*protocol.FileMetadata, error) {
+	if name == "" {
+		return nil, fmt.Errorf("missing file name")
+	}
+	if len(s.dataServers) == 0 {
+		return nil, fmt.Errorf("no data servers configured")
+	}
+	meta, err := s.planFileMetadata(name, len(data))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.uploadBlocks(meta.Blocks, data); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.files[name] = *meta
+	s.mu.Unlock()
+	return meta, nil
+}
+
+// FetchFileBytes downloads a full file from the data servers.
+func (s *Server) FetchFileBytes(name string) ([]byte, *protocol.FileMetadata, error) {
+	s.mu.RLock()
+	meta, ok := s.files[name]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil, fmt.Errorf("file not found")
+	}
+	buf := make([]byte, 0, meta.TotalSize)
+	for _, block := range meta.Blocks {
+		data, err := s.pullBlock(block.DataServer, block.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		buf = append(buf, data...)
+	}
+	return buf, &meta, nil
+}
+
+func (s *Server) uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
+	offset := 0
+	for _, block := range blocks {
+		end := offset + block.Size
+		if end > len(data) {
+			return fmt.Errorf("block %s exceeds file size", block.ID)
+		}
+		chunk := data[offset:end]
+		if err := s.pushBlock(block, chunk); err != nil {
+			return err
+		}
+		offset = end
+	}
+	if offset != len(data) {
+		return fmt.Errorf("plan left %d bytes unused", len(data)-offset)
+	}
+	return nil
+}
+
+func (s *Server) pushBlock(block protocol.BlockRef, data []byte) error {
+	conn, err := net.Dial("tcp", block.DataServer)
+	if err != nil {
+		return fmt.Errorf("connect to data server %s: %w", block.DataServer, err)
+	}
+	defer conn.Close()
+
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(bufio.NewReader(conn))
+	req := protocol.DataServerRequest{
+		Command: "store",
+		BlockID: block.ID,
+		Data:    base64.StdEncoding.EncodeToString(data),
+	}
+	if err := enc.Encode(req); err != nil {
+		return fmt.Errorf("send store to %s: %w", block.DataServer, err)
+	}
+	var resp protocol.DataServerResponse
+	if err := dec.Decode(&resp); err != nil {
+		return fmt.Errorf("decode response from %s: %w", block.DataServer, err)
+	}
+	if resp.Status != "ok" {
+		if resp.Error == "" {
+			resp.Error = "data server returned error"
+		}
+		return fmt.Errorf("data server %s: %s", block.DataServer, resp.Error)
+	}
+	return nil
 }
 
 func (s *Server) nextDataServer() string {

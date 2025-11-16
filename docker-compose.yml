@@ -27,7 +27,7 @@ services:
     command: >-
       go run ./cmd/metadataserver
       --addr :9100
-      --block-size 8
+      --block-size 1024
       --data-servers dataserver1:9101,dataserver2:9102
       --metadata-file /metadata/metadata.json
       --persist-interval 30s
@@ -36,6 +36,7 @@ services:
       - metadata:/metadata
     ports:
       - "9100:9100"
+      - "8090:8090"
     depends_on:
       - dataserver1
       - dataserver2

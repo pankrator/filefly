@@ -24,9 +24,16 @@ services:
   metadata:
     image: golang:1.21
     working_dir: /app
-    command: go run ./cmd/metadataserver --addr :9100 --block-size 8 --data-servers dataserver1:9101,dataserver2:9102
+    command: >-
+      go run ./cmd/metadataserver
+      --addr :9100
+      --block-size 8
+      --data-servers dataserver1:9101,dataserver2:9102
+      --metadata-file /metadata/metadata.json
+      --persist-interval 30s
     volumes:
       - .:/app
+      - metadata:/metadata
     ports:
       - "9100:9100"
     depends_on:
@@ -36,3 +43,4 @@ services:
 volumes:
   blocks1:
   blocks2:
+  metadata:

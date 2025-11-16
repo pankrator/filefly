@@ -4,12 +4,16 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"filefly/internal/protocol"
 )
@@ -19,18 +23,26 @@ type Server struct {
 	addr        string
 	blockSize   int
 	dataServers []string
+	persistPath string
+	persistFreq time.Duration
 
 	mu     sync.RWMutex
 	files  map[string]protocol.FileMetadata
 	rrNext int
 }
 
+type diskSnapshot struct {
+	Files map[string]protocol.FileMetadata `json:"files"`
+}
+
 // New creates a metadata server instance.
-func New(addr string, blockSize int, dataServers []string) *Server {
+func New(addr string, blockSize int, dataServers []string, persistPath string, persistFreq time.Duration) *Server {
 	return &Server{
 		addr:        addr,
 		blockSize:   blockSize,
 		dataServers: append([]string(nil), dataServers...),
+		persistPath: persistPath,
+		persistFreq: persistFreq,
 		files:       make(map[string]protocol.FileMetadata),
 	}
 }
@@ -40,6 +52,10 @@ func (s *Server) Listen() error {
 	if len(s.dataServers) == 0 {
 		return fmt.Errorf("metadata server requires at least one data server")
 	}
+	if err := s.loadFromDisk(); err != nil {
+		return fmt.Errorf("metadata bootstrap: %w", err)
+	}
+	s.startPersistenceLoop()
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("metadata server listen: %w", err)
@@ -143,6 +159,83 @@ func (s *Server) determineFileSize(req protocol.MetadataRequest) (int, error) {
 		return len(raw), nil
 	}
 	return 0, fmt.Errorf("missing file_size or data")
+}
+
+func (s *Server) startPersistenceLoop() {
+	if s.persistPath == "" || s.persistFreq <= 0 {
+		return
+	}
+	if err := s.persistToDisk(); err != nil {
+		log.Printf("metadata persistence error: %v", err)
+	}
+	go func() {
+		ticker := time.NewTicker(s.persistFreq)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := s.persistToDisk(); err != nil {
+				log.Printf("metadata persistence error: %v", err)
+			}
+		}
+	}()
+}
+
+func (s *Server) persistToDisk() error {
+	if s.persistPath == "" {
+		return nil
+	}
+	s.mu.RLock()
+	snapshot := make(map[string]protocol.FileMetadata, len(s.files))
+	for name, meta := range s.files {
+		snapshot[name] = meta
+	}
+	s.mu.RUnlock()
+
+	bytes, err := json.MarshalIndent(diskSnapshot{Files: snapshot}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal metadata snapshot: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+		return fmt.Errorf("ensure metadata directory: %w", err)
+	}
+	tmp := s.persistPath + ".tmp"
+	if err := os.WriteFile(tmp, bytes, 0o600); err != nil {
+		return fmt.Errorf("write temp metadata file: %w", err)
+	}
+	if err := os.Rename(tmp, s.persistPath); err != nil {
+		return fmt.Errorf("replace metadata file: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) loadFromDisk() error {
+	if s.persistPath == "" {
+		return nil
+	}
+	f, err := os.Open(s.persistPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("open metadata file: %w", err)
+	}
+	defer f.Close()
+
+	var snapshot diskSnapshot
+	dec := json.NewDecoder(f)
+	if err := dec.Decode(&snapshot); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return fmt.Errorf("decode metadata file: %w", err)
+	}
+	if snapshot.Files == nil {
+		snapshot.Files = make(map[string]protocol.FileMetadata)
+	}
+	s.mu.Lock()
+	s.files = snapshot.Files
+	s.mu.Unlock()
+	log.Printf("metadata server loaded %d entries from %s", len(snapshot.Files), s.persistPath)
+	return nil
 }
 
 func (s *Server) planBlocks(fileName string, totalSize int) []protocol.BlockRef {

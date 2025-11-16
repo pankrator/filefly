@@ -20,14 +20,33 @@ from your local machine into one of the running data server containers.
    ```
    The `metadata`, `dataserver1`, and `dataserver2` services should all report a
    `running` state.
-3. Tail the metadata logs (optional) to observe requests:
+3. Tail the metadata logs (optional) to observe requests and snapshot activity:
    ```bash
    docker compose logs -f metadata
    ```
+   The server periodically reports `metadata persistence` messages when it flushes
+   its in-memory state to the `/metadata/metadata.json` file mounted from the
+   `metadata` volume.
 4. When you are finished, stop and clean up the stack:
    ```bash
    docker compose down -v
    ```
+
+### Metadata persistence configuration
+
+The metadata server now keeps an on-disk snapshot so the cluster can recover file
+plans after a restart. The Docker Compose service wires two CLI flags into the
+server to enable the feature:
+
+* `--metadata-file /metadata/metadata.json` – points at a file stored on the
+  dedicated Docker volume named `metadata`.
+* `--persist-interval 30s` – instructs the server to save a fresh snapshot every
+  30 seconds.
+
+If you need to tweak these values (for example to slow down snapshotting in a
+test environment) adjust the `metadata` service command in `docker-compose.yml`.
+The metadata service loads the snapshot file before it accepts requests, so you
+can safely restart the stack without losing uploaded file metadata.
 
 ## Uploading a local file to a data server
 

@@ -10,6 +10,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"filefly/internal/transfer"
 )
 
 func newUIServer(metadataAddr string, static http.FileSystem, downloadConcurrency int) *uiServer {
@@ -20,6 +22,7 @@ func newUIServer(metadataAddr string, static http.FileSystem, downloadConcurrenc
 		metadata:            newMetadataClient(metadataAddr),
 		static:              static,
 		downloadConcurrency: downloadConcurrency,
+		transfer:            transfer.NewClient(),
 	}
 }
 
@@ -27,6 +30,13 @@ type uiServer struct {
 	metadata            *metadataClient
 	static              http.FileSystem
 	downloadConcurrency int
+	transfer            *transfer.Client
+}
+
+func (s *uiServer) Close() {
+	if s.transfer != nil {
+		s.transfer.Close()
+	}
 }
 
 func (s *uiServer) routes() http.Handler {
@@ -104,7 +114,7 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := uploadBlocks(meta.Blocks, data); err != nil {
+	if err := s.transfer.UploadBlocks(meta.Blocks, data); err != nil {
 		http.Error(w, fmt.Sprintf("upload blocks: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -163,7 +173,7 @@ func (s *uiServer) handleDownload(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
-	data, err := downloadFile(meta, s.downloadConcurrency)
+	data, err := s.transfer.DownloadFile(meta, s.downloadConcurrency)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("download file: %v", err), http.StatusInternalServerError)
 		return

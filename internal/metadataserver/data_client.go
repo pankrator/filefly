@@ -58,6 +58,43 @@ func (c *dataServerClient) DeleteFile(meta protocol.FileMetadata) error {
 }
 
 func (c *dataServerClient) pullBlock(addr, blockID string) ([]byte, error) {
+	resp, err := c.request(addr, protocol.DataServerRequest{Command: "retrieve", BlockID: blockID})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("data server %s error: %s", addr, messageOrDefault(resp.Error, "retrieve failed"))
+	}
+	data, err := base64.StdEncoding.DecodeString(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64 from %s: %w", addr, err)
+	}
+	return data, nil
+}
+
+func (c *dataServerClient) sendDelete(addr, blockID string) error {
+	resp, err := c.request(addr, protocol.DataServerRequest{Command: "delete", BlockID: blockID})
+	if err != nil {
+		return err
+	}
+	if resp.Status != "ok" {
+		return fmt.Errorf("data server %s: %s", addr, messageOrDefault(resp.Error, "delete failed"))
+	}
+	return nil
+}
+
+func (c *dataServerClient) Ping(addr string) error {
+	resp, err := c.request(addr, protocol.DataServerRequest{Command: "ping"})
+	if err != nil {
+		return err
+	}
+	if resp.Status != "ok" || !resp.Pong {
+		return fmt.Errorf("data server %s: %s", addr, messageOrDefault(resp.Error, "no pong received"))
+	}
+	return nil
+}
+
+func (c *dataServerClient) request(addr string, req protocol.DataServerRequest) (*protocol.DataServerResponse, error) {
 	dialer := &net.Dialer{Timeout: c.timeout}
 	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
@@ -68,50 +105,21 @@ func (c *dataServerClient) pullBlock(addr, blockID string) ([]byte, error) {
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(bufio.NewReader(conn))
-	req := protocol.DataServerRequest{Command: "retrieve", BlockID: blockID}
 	if err := enc.Encode(req); err != nil {
-		return nil, fmt.Errorf("send retrieve to %s: %w", addr, err)
+		return nil, fmt.Errorf("send %s to %s: %w", req.Command, addr, err)
 	}
 	var resp protocol.DataServerResponse
 	if err := dec.Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response from %s: %w", addr, err)
 	}
-	if resp.Status != "ok" {
-		return nil, fmt.Errorf("data server %s error: %s", addr, resp.Error)
-	}
-	data, err := base64.StdEncoding.DecodeString(resp.Data)
-	if err != nil {
-		return nil, fmt.Errorf("invalid base64 from %s: %w", addr, err)
-	}
-	return data, nil
+	return &resp, nil
 }
 
-func (c *dataServerClient) sendDelete(addr, blockID string) error {
-	dialer := &net.Dialer{Timeout: c.timeout}
-	conn, err := dialer.Dial("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("connect to data server %s: %w", addr, err)
+func messageOrDefault(message, fallback string) string {
+	if message != "" {
+		return message
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(c.timeout))
-
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(bufio.NewReader(conn))
-	req := protocol.DataServerRequest{Command: "delete", BlockID: blockID}
-	if err := enc.Encode(req); err != nil {
-		return fmt.Errorf("send delete to %s: %w", addr, err)
-	}
-	var resp protocol.DataServerResponse
-	if err := dec.Decode(&resp); err != nil {
-		return fmt.Errorf("decode response from %s: %w", addr, err)
-	}
-	if resp.Status != "ok" {
-		if resp.Error == "" {
-			resp.Error = "data server returned error"
-		}
-		return fmt.Errorf("data server %s: %s", addr, resp.Error)
-	}
-	return nil
+	return fallback
 }
 
 func normalizeBlockReplicas(block protocol.BlockRef) []protocol.BlockReplica {

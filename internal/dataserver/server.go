@@ -78,7 +78,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		case "delete":
 			resp = s.delete(req)
 		case "ping":
-			resp = protocol.DataServerResponse{Status: "ok"}
+			resp = protocol.DataServerResponse{Status: "ok", Pong: true}
 		default:
 			resp = protocol.DataServerResponse{Status: "error", Error: "unknown command"}
 		}

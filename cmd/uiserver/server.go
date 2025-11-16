@@ -43,6 +43,7 @@ func (s *uiServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/files/", s.handleFileDetail)
+	mux.HandleFunc("/api/data-servers", s.handleDataServers)
 	mux.Handle("/", http.FileServer(s.static))
 	return mux
 }
@@ -56,6 +57,19 @@ func (s *uiServer) handleFiles(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *uiServer) handleDataServers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	servers, err := s.metadata.listDataServers()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("list data servers: %v", err), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, map[string]any{"servers": servers})
 }
 
 func (s *uiServer) handleListFiles(w http.ResponseWriter, _ *http.Request) {

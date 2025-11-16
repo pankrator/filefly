@@ -104,12 +104,23 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 }
 
 func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*protocol.FileMetadata, error) {
-	if s.blockSize <= 0 {
-		return nil, fmt.Errorf("invalid block size")
-	}
 	totalSize, err := s.determineFileSize(req)
 	if err != nil {
 		return nil, err
+	}
+	meta, err := s.planFileMetadata(name, totalSize)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.files[name] = *meta
+	s.mu.Unlock()
+	return meta, nil
+}
+
+func (s *Server) planFileMetadata(name string, totalSize int) (*protocol.FileMetadata, error) {
+	if s.blockSize <= 0 {
+		return nil, fmt.Errorf("invalid block size")
 	}
 	blocks := s.planBlocks(name, totalSize)
 	meta := protocol.FileMetadata{
@@ -117,9 +128,6 @@ func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*pr
 		TotalSize: totalSize,
 		Blocks:    blocks,
 	}
-	s.mu.Lock()
-	s.files[name] = meta
-	s.mu.Unlock()
 	return &meta, nil
 }
 
@@ -204,14 +212,19 @@ func (s *Server) StoreFileBytes(name string, data []byte) (*protocol.FileMetadat
 	if name == "" {
 		return nil, fmt.Errorf("missing file name")
 	}
-	req := protocol.MetadataRequest{FileName: name, FileSize: len(data)}
-	meta, err := s.planAndSaveFile(name, req)
+	if len(s.dataServers) == 0 {
+		return nil, fmt.Errorf("no data servers configured")
+	}
+	meta, err := s.planFileMetadata(name, len(data))
 	if err != nil {
 		return nil, err
 	}
 	if err := s.uploadBlocks(meta.Blocks, data); err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	s.files[name] = *meta
+	s.mu.Unlock()
 	return meta, nil
 }
 

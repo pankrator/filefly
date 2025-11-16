@@ -15,44 +15,49 @@ import (
 )
 
 func main() {
-	metadataAddr := flag.String("metadata-addr", "localhost:9000", "address of the metadata server")
-	filePath := flag.String("file", "", "path to the file that should be uploaded")
-	fileName := flag.String("file-name", "", "optional logical name for the file; defaults to the basename of --file")
+	metadataAddr := flag.String("metadata-server", ":9000", "address of the metadata server")
+	filePath := flag.String("file", "", "path to the file to upload")
+	fileName := flag.String("name", "", "remote file name (defaults to the base name of --file)")
 	flag.Parse()
 
 	if *filePath == "" {
-		log.Fatal("missing --file path to upload")
+		log.Fatal("--file is required")
 	}
 
-	contents, err := os.ReadFile(*filePath)
+	if *fileName == "" {
+		*fileName = filepath.Base(*filePath)
+	}
+
+	data, err := os.ReadFile(*filePath)
 	if err != nil {
 		log.Fatalf("read file: %v", err)
 	}
 
-	name := *fileName
-	if name == "" {
-		name = filepath.Base(*filePath)
-	}
-
-	meta, err := requestPlan(*metadataAddr, name, len(contents))
+	plan, err := requestPlan(*metadataAddr, *fileName, len(data))
 	if err != nil {
-		log.Fatalf("request upload plan: %v", err)
-	}
-	if meta == nil || meta.Metadata == nil {
-		log.Fatalf("metadata server did not return a plan")
+		log.Fatalf("request plan: %v", err)
 	}
 
-	if err := uploadBlocks(meta.Metadata.Blocks, contents); err != nil {
+	if plan.Metadata == nil {
+		log.Fatalf("metadata server did not return metadata for %s", *fileName)
+	}
+
+	if len(plan.Metadata.Blocks) == 0 {
+		log.Printf("file %s has no data to upload", plan.Metadata.Name)
+		return
+	}
+
+	if err := uploadBlocks(plan.Metadata.Blocks, data); err != nil {
 		log.Fatalf("upload blocks: %v", err)
 	}
 
-	log.Printf("uploaded %s (%d bytes) in %d blocks", name, len(contents), len(meta.Metadata.Blocks))
+	log.Printf("uploaded %s (%d bytes) in %d blocks", plan.Metadata.Name, plan.Metadata.TotalSize, len(plan.Metadata.Blocks))
 }
 
-func requestPlan(addr, fileName string, fileSize int) (*protocol.MetadataResponse, error) {
+func requestPlan(addr, fileName string, size int) (*protocol.MetadataResponse, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("connect to metadata server %s: %w", addr, err)
+		return nil, fmt.Errorf("connect to metadata server: %w", err)
 	}
 	defer conn.Close()
 
@@ -61,21 +66,21 @@ func requestPlan(addr, fileName string, fileSize int) (*protocol.MetadataRespons
 	req := protocol.MetadataRequest{
 		Command:  "store_file",
 		FileName: fileName,
-		FileSize: fileSize,
+		FileSize: size,
 	}
 	if err := enc.Encode(req); err != nil {
-		return nil, fmt.Errorf("send store_file request: %w", err)
+		return nil, fmt.Errorf("send store_file: %w", err)
 	}
 
 	var resp protocol.MetadataResponse
 	if err := dec.Decode(&resp); err != nil {
-		return nil, fmt.Errorf("decode metadata response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if resp.Status != "ok" {
-		if resp.Error != "" {
-			return nil, fmt.Errorf("metadata server error: %s", resp.Error)
+		if resp.Error == "" {
+			resp.Error = "metadata server returned error"
 		}
-		return nil, fmt.Errorf("metadata server returned status %s", resp.Status)
+		return nil, fmt.Errorf(resp.Error)
 	}
 	return &resp, nil
 }
@@ -88,22 +93,21 @@ func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 			return fmt.Errorf("block %s exceeds file size", block.ID)
 		}
 		chunk := data[offset:end]
-		offset = end
-		if err := sendBlock(block.DataServer, block.ID, chunk); err != nil {
+		if err := uploadBlock(block, chunk); err != nil {
 			return err
 		}
-		log.Printf("sent block %s (%d bytes) to %s", block.ID, len(chunk), block.DataServer)
+		offset = end
 	}
 	if offset != len(data) {
-		return fmt.Errorf("plan only covered %d of %d bytes", offset, len(data))
+		return fmt.Errorf("plan left %d bytes unused", len(data)-offset)
 	}
 	return nil
 }
 
-func sendBlock(addr, blockID string, chunk []byte) error {
-	conn, err := net.Dial("tcp", addr)
+func uploadBlock(block protocol.BlockRef, data []byte) error {
+	conn, err := net.Dial("tcp", block.DataServer)
 	if err != nil {
-		return fmt.Errorf("connect to data server %s: %w", addr, err)
+		return fmt.Errorf("connect to data server %s: %w", block.DataServer, err)
 	}
 	defer conn.Close()
 
@@ -112,22 +116,23 @@ func sendBlock(addr, blockID string, chunk []byte) error {
 
 	req := protocol.DataServerRequest{
 		Command: "store",
-		BlockID: blockID,
-		Data:    base64.StdEncoding.EncodeToString(chunk),
+		BlockID: block.ID,
+		Data:    base64.StdEncoding.EncodeToString(data),
 	}
 	if err := enc.Encode(req); err != nil {
-		return fmt.Errorf("send block %s: %w", blockID, err)
+		return fmt.Errorf("send store to %s: %w", block.DataServer, err)
 	}
 
 	var resp protocol.DataServerResponse
 	if err := dec.Decode(&resp); err != nil {
-		return fmt.Errorf("decode response for block %s: %w", blockID, err)
+		return fmt.Errorf("decode response from %s: %w", block.DataServer, err)
 	}
 	if resp.Status != "ok" {
-		if resp.Error != "" {
-			return fmt.Errorf("data server %s error for block %s: %s", addr, blockID, resp.Error)
+		if resp.Error == "" {
+			resp.Error = "data server returned error"
 		}
-		return fmt.Errorf("data server %s returned status %s", addr, resp.Status)
+		return fmt.Errorf("data server %s: %s", block.DataServer, resp.Error)
 	}
+
 	return nil
 }

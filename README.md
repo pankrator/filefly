@@ -17,7 +17,6 @@ inspected with tools such as `nc` or `socat`.
 cmd/
   dataserver        # binary that stores raw blocks on disk
   metadataserver    # binary that stores metadata and produces upload plans
-  client            # helper CLI that uploads files using the metadata plan
 internal/
   dataserver        # TCP server implementation for blocks
   metadataserver    # metadata server implementation
@@ -36,20 +35,6 @@ go run ./cmd/dataserver --addr :9001 --storage_dir /tmp/filefly-blocks
 ```bash
 go run ./cmd/metadataserver --addr :9000 --block-size 8 --data-servers :9001
 ```
-
-## Running everything with Docker Compose
-
-The included `docker-compose.yml` spins up two data servers and one metadata
-server backed by the official `golang:1.21` image. Each data server keeps its
-blocks inside a persistent named volume so files survive container restarts.
-
-```bash
-docker compose up
-```
-
-This command exposes the metadata server on `localhost:9100` and the data
-servers on `localhost:9101` and `localhost:9102`. Shut everything down (and
-remove the block volumes) with `docker compose down -v`.
 
 ## Planning uploads for a file
 
@@ -80,25 +65,18 @@ correct payload for each chunk. Blocks written to the data server are persisted
 as individual files below the configured storage directory, so removing a block
 is as simple as deleting that file from the filesystem.
 
-## Uploading a file with the Go client
+## Uploading files with the CLI client
 
-Instead of issuing raw TCP commands, you can rely on the included Go client to
-ask the metadata server for a plan and push each chunk to the referenced data
-servers.
+The `cmd/client` helper automates the metadata and data server interactions. It
+requests an upload plan from the metadata server and then pushes each chunk to
+the data servers listed in that plan.
 
-1. Make sure the servers are running (either manually or via `docker compose`).
-2. Create a sample file: `echo 'hello from FileFly' > hello.txt`.
-3. Upload it through the client:
+```bash
+go run ./cmd/client --metadata-server :9000 --file ./hello.txt
+```
 
-   ```bash
-   go run ./cmd/client --metadata-addr localhost:9100 --file ./hello.txt
-   ```
-
-   Override the stored file name with `--file-name` if you do not want to reuse
-   the file's basename. The client logs each block upload as it progresses.
-
-The CLI only sends bytes to the data servers after obtaining the plan from the
-metadata server, mirroring how a production client would coordinate uploads.
+The remote file name defaults to the base name of the local path. Use
+`--name=my-remote-name` to override it.
 
 ## Fetching and inspecting metadata
 

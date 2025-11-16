@@ -97,8 +97,13 @@ function renderFileDetails(file) {
   fileDetailsEl.innerHTML = `
     <div class="detail-header">
       <h3>${file.name}</h3>
-      <p>Total size: ${file.total_size ?? file.totalSize} bytes · Replicas per block: ${file.replicas ?? file.replication_factor ?? 1}</p>
-      <button type="button" id="download-btn">Download</button>
+      <div class="detail-meta">
+        <p>Total size: ${file.total_size ?? file.totalSize} bytes · Replicas per block: ${file.replicas ?? file.replication_factor ?? 1}</p>
+        <div class="detail-actions">
+          <button type="button" id="download-btn">Download</button>
+          <button type="button" id="delete-btn" class="button-danger">Delete</button>
+        </div>
+      </div>
     </div>
     <table>
       <thead>
@@ -117,6 +122,8 @@ function renderFileDetails(file) {
 
   const downloadBtn = document.getElementById("download-btn");
   downloadBtn.addEventListener("click", () => downloadFile(file.name));
+  const deleteBtn = document.getElementById("delete-btn");
+  deleteBtn.addEventListener("click", () => deleteFile(file.name));
 }
 
 async function downloadFile(name) {
@@ -138,6 +145,31 @@ async function downloadFile(name) {
     alert(err.message);
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function deleteFile(name) {
+  if (!window.confirm(`Delete ${name}? This cannot be undone.`)) {
+    return;
+  }
+  const btn = document.getElementById("delete-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const response = await fetch(`/api/files/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const message = (await response.text()) || "Delete failed.";
+      throw new Error(message);
+    }
+    fileDetailsEl.innerHTML = '<p class="status success">File deleted.</p>';
+    selectedFile = null;
+    await loadFiles();
+  } catch (err) {
+    const message = err?.message || "Delete failed.";
+    fileDetailsEl.innerHTML = `<p class="status error">${message}</p>`;
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

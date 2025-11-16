@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,9 +27,10 @@ type Server struct {
 	persistPath string
 	persistFreq time.Duration
 
-	mu     sync.RWMutex
-	files  map[string]protocol.FileMetadata
-	rrNext int
+	mu                sync.RWMutex
+	files             map[string]protocol.FileMetadata
+	inFlightDeletions map[string]struct{}
+	rrNext            int
 }
 
 const replicaFetchTimeout = 5 * time.Second
@@ -40,12 +42,13 @@ type diskSnapshot struct {
 // New creates a metadata server instance.
 func New(addr string, blockSize int, dataServers []string, persistPath string, persistFreq time.Duration) *Server {
 	return &Server{
-		addr:        addr,
-		blockSize:   blockSize,
-		dataServers: append([]string(nil), dataServers...),
-		persistPath: persistPath,
-		persistFreq: persistFreq,
-		files:       make(map[string]protocol.FileMetadata),
+		addr:              addr,
+		blockSize:         blockSize,
+		dataServers:       append([]string(nil), dataServers...),
+		persistPath:       persistPath,
+		persistFreq:       persistFreq,
+		files:             make(map[string]protocol.FileMetadata),
+		inFlightDeletions: make(map[string]struct{}),
 	}
 }
 
@@ -99,6 +102,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = s.getMetadata(req)
 		case "list_files":
 			resp = s.listFilesResponse()
+		case "delete_file":
+			resp = s.deleteFile(req)
 		case "ping":
 			resp = protocol.MetadataResponse{Status: "ok"}
 		default:
@@ -137,6 +142,10 @@ func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*pr
 		return nil, err
 	}
 	s.mu.Lock()
+	if _, deleting := s.inFlightDeletions[name]; deleting {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("delete in progress for %s", name)
+	}
 	s.files[name] = *meta
 	s.mu.Unlock()
 	return meta, nil
@@ -335,6 +344,39 @@ func (s *Server) listFilesResponse() protocol.MetadataResponse {
 	return protocol.MetadataResponse{Status: "ok", Files: s.ListFiles()}
 }
 
+func (s *Server) deleteFile(req protocol.MetadataRequest) protocol.MetadataResponse {
+	if req.FileName == "" {
+		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
+	}
+
+	s.mu.Lock()
+	meta, ok := s.files[req.FileName]
+	if !ok {
+		s.mu.Unlock()
+		return protocol.MetadataResponse{Status: "error", Error: "file not found"}
+	}
+	if _, deleting := s.inFlightDeletions[req.FileName]; deleting {
+		s.mu.Unlock()
+		return protocol.MetadataResponse{Status: "error", Error: "delete already in progress"}
+	}
+	s.inFlightDeletions[req.FileName] = struct{}{}
+	s.mu.Unlock()
+
+	if err := s.deleteFileBlocks(meta); err != nil {
+		s.mu.Lock()
+		delete(s.inFlightDeletions, req.FileName)
+		s.mu.Unlock()
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
+	}
+
+	s.mu.Lock()
+	delete(s.files, req.FileName)
+	delete(s.inFlightDeletions, req.FileName)
+	s.mu.Unlock()
+
+	return protocol.MetadataResponse{Status: "ok"}
+}
+
 // ListFiles returns all known metadata entries sorted by name.
 func (s *Server) ListFiles() []protocol.FileMetadata {
 	s.mu.RLock()
@@ -422,4 +464,54 @@ func (s *Server) pullBlock(addr, blockID string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid base64 from %s: %w", addr, err)
 	}
 	return data, nil
+}
+
+func (s *Server) deleteFileBlocks(meta protocol.FileMetadata) error {
+	var errs []string
+	for _, block := range meta.Blocks {
+		replicas := normalizeBlockReplicas(block)
+		for _, replica := range replicas {
+			if replica.DataServer == "" {
+				continue
+			}
+			if err := s.sendDelete(replica.DataServer, block.ID); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("delete file %s: %s", meta.Name, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (s *Server) sendDelete(addr, blockID string) error {
+	dialer := &net.Dialer{Timeout: replicaFetchTimeout}
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("connect to data server %s: %w", addr, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(replicaFetchTimeout))
+
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(bufio.NewReader(conn))
+	req := protocol.DataServerRequest{
+		Command: "delete",
+		BlockID: blockID,
+	}
+	if err := enc.Encode(req); err != nil {
+		return fmt.Errorf("send delete to %s: %w", addr, err)
+	}
+	var resp protocol.DataServerResponse
+	if err := dec.Decode(&resp); err != nil {
+		return fmt.Errorf("decode response from %s: %w", addr, err)
+	}
+	if resp.Status != "ok" {
+		if resp.Error == "" {
+			resp.Error = "data server returned error"
+		}
+		return fmt.Errorf("data server %s: %s", addr, resp.Error)
+	}
+	return nil
 }

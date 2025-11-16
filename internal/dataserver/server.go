@@ -75,6 +75,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = s.store(req)
 		case "retrieve":
 			resp = s.retrieve(req)
+		case "delete":
+			resp = s.delete(req)
 		case "ping":
 			resp = protocol.DataServerResponse{Status: "ok"}
 		default:
@@ -124,6 +126,24 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 	}
 
 	return protocol.DataServerResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(data)}
+}
+
+func (s *Server) delete(req protocol.DataServerRequest) protocol.DataServerResponse {
+	if req.BlockID == "" {
+		return protocol.DataServerResponse{Status: "error", Error: "missing block_id"}
+	}
+
+	path := s.blockPath(req.BlockID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return protocol.DataServerResponse{Status: "ok"}
+		}
+		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("delete block: %v", err)}
+	}
+
+	return protocol.DataServerResponse{Status: "ok"}
 }
 
 func (s *Server) blockPath(blockID string) string {

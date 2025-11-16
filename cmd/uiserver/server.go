@@ -126,6 +126,10 @@ func (s *uiServer) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) > 1 {
 		if parts[1] == "content" {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
 			s.handleDownload(w, r, name)
 			return
 		}
@@ -133,12 +137,23 @@ func (s *uiServer) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := s.metadata.getMetadata(name)
-	if err != nil {
-		s.handleMetadataError(w, r, err)
-		return
+	switch r.Method {
+	case http.MethodGet:
+		meta, err := s.metadata.getMetadata(name)
+		if err != nil {
+			s.handleMetadataError(w, r, err)
+			return
+		}
+		respondJSON(w, map[string]any{"file": meta})
+	case http.MethodDelete:
+		if err := s.metadata.deleteFile(name); err != nil {
+			s.handleMetadataError(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	respondJSON(w, map[string]any{"file": meta})
 }
 
 func (s *uiServer) handleDownload(w http.ResponseWriter, r *http.Request, name string) {

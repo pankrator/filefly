@@ -80,6 +80,14 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.button-danger {
+  background: #dc2626;
+}
+
+.button-danger:hover {
+  background: #b91c1c;
+}
+
 .file-list {
   list-style: none;
   padding: 0;
@@ -107,6 +115,36 @@ button:disabled {
   width: 100%;
   border-collapse: collapse;
   margin-top: 1rem;
+}
+
+.detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+@media (min-width: 640px) {
+  .detail-header {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .detail-meta {
+    align-items: flex-end;
+  }
 }
 
 .file-details th,

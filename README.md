@@ -105,6 +105,10 @@ REQ
   The metadata server picks targets in a simple round-robin order.
 * **storage_dir** – directory used by each data server process to persist block
   files. Defaults to `./blocks` when running `cmd/dataserver`.
+* **metadata-file** – optional path where the metadata server periodically writes
+  a JSON snapshot of its in-memory state so uploads survive restarts.
+* **persist-interval** – duration between metadata snapshots. Set to `0s` to
+  disable automatic persistence.
 
 This simple implementation was built for educational purposes. It should be
 straightforward to extend the servers with authentication, replication, or other

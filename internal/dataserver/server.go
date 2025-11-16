@@ -43,7 +43,6 @@ func (s *Server) Listen() error {
 		return fmt.Errorf("dataserver listen: %w", err)
 	}
 	defer ln.Close()
-
 	log.Printf("data server listening on %s", s.addr)
 	for {
 		conn, err := ln.Accept()

@@ -7,13 +7,17 @@ import (
 	"filefly/internal/protocol"
 )
 
-const defaultHealthCheckInterval = 10 * time.Second
+const (
+	defaultHealthCheckInterval = 10 * time.Second
+	defaultRetryInterval       = 30 * time.Second
+)
 
 // dataHealthMonitor periodically pings data servers and keeps track of their health.
 type dataHealthMonitor struct {
-	client   *dataServerClient
-	servers  []string
-	interval time.Duration
+	client        *dataServerClient
+	servers       []string
+	interval      time.Duration
+	retryInterval time.Duration
 
 	mu       sync.RWMutex
 	statuses map[string]protocol.DataServerHealth
@@ -27,12 +31,17 @@ func newDataHealthMonitor(servers []string, client *dataServerClient, interval t
 	if interval <= 0 {
 		interval = defaultHealthCheckInterval
 	}
+	retryInterval := defaultRetryInterval
+	if interval > retryInterval {
+		retryInterval = interval
+	}
 	return &dataHealthMonitor{
-		client:   client,
-		servers:  append([]string(nil), servers...),
-		interval: interval,
-		statuses: make(map[string]protocol.DataServerHealth),
-		stop:     make(chan struct{}),
+		client:        client,
+		servers:       append([]string(nil), servers...),
+		interval:      interval,
+		retryInterval: retryInterval,
+		statuses:      make(map[string]protocol.DataServerHealth),
+		stop:          make(chan struct{}),
 	}
 }
 
@@ -56,21 +65,37 @@ func (m *dataHealthMonitor) Stop() {
 
 func (m *dataHealthMonitor) run() {
 	defer m.wg.Done()
-	m.checkAll()
-	ticker := time.NewTicker(m.interval)
-	defer ticker.Stop()
+	m.checkAllServers()
+	healthTicker := time.NewTicker(m.interval)
+	retryTicker := time.NewTicker(m.retryInterval)
+	defer healthTicker.Stop()
+	defer retryTicker.Stop()
 	for {
 		select {
-		case <-ticker.C:
-			m.checkAll()
+		case <-healthTicker.C:
+			m.checkHealthy()
+		case <-retryTicker.C:
+			m.retryUnhealthy()
 		case <-m.stop:
 			return
 		}
 	}
 }
 
-func (m *dataHealthMonitor) checkAll() {
-	for _, addr := range m.servers {
+func (m *dataHealthMonitor) checkAllServers() {
+	for _, addr := range m.snapshotServers() {
+		m.check(addr)
+	}
+}
+
+func (m *dataHealthMonitor) checkHealthy() {
+	for _, addr := range m.healthyServers() {
+		m.check(addr)
+	}
+}
+
+func (m *dataHealthMonitor) retryUnhealthy() {
+	for _, addr := range m.unhealthyServers() {
 		m.check(addr)
 	}
 }
@@ -118,6 +143,59 @@ func (m *dataHealthMonitor) List() []protocol.DataServerHealth {
 			continue
 		}
 		result = append(result, protocol.DataServerHealth{Address: addr})
+	}
+	return result
+}
+
+func (m *dataHealthMonitor) EnsureServer(addr string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	for _, existing := range m.servers {
+		if existing == addr {
+			m.mu.Unlock()
+			return
+		}
+	}
+	m.servers = append(m.servers, addr)
+	m.mu.Unlock()
+}
+
+func (m *dataHealthMonitor) CheckNow(addr string) {
+	if m == nil || addr == "" {
+		return
+	}
+	go m.check(addr)
+}
+
+func (m *dataHealthMonitor) snapshotServers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.servers...)
+}
+
+func (m *dataHealthMonitor) healthyServers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]string, 0, len(m.servers))
+	for _, addr := range m.servers {
+		status, ok := m.statuses[addr]
+		if !ok || status.Healthy {
+			result = append(result, addr)
+		}
+	}
+	return result
+}
+
+func (m *dataHealthMonitor) unhealthyServers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []string
+	for addr, status := range m.statuses {
+		if !status.Healthy {
+			result = append(result, addr)
+		}
 	}
 	return result
 }

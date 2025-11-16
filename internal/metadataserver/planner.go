@@ -113,3 +113,15 @@ func (r *roundRobinSelector) NextSet(count int) ([]string, error) {
 	}
 	return set, nil
 }
+
+func (r *roundRobinSelector) SetServers(servers []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	copy := append([]string(nil), servers...)
+	r.servers = copy
+	if len(r.servers) == 0 {
+		r.next = 0
+		return
+	}
+	r.next = r.next % len(r.servers)
+}

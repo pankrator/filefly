@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
+	"sync"
 	"time"
 
 	"filefly/internal/protocol"
@@ -20,11 +22,14 @@ type Server struct {
 	dataServers []string
 	persistFreq time.Duration
 
+	selector   *roundRobinSelector
 	planner    *blockPlanner
 	store      metadataStore
 	persister  *diskPersister
 	dataClient *dataServerClient
 	health     *dataHealthMonitor
+
+	mu sync.RWMutex
 }
 
 // New creates a metadata server instance.
@@ -36,6 +41,7 @@ func New(addr string, blockSize int, dataServers []string, persistPath string, p
 		blockSize:   blockSize,
 		dataServers: append([]string(nil), dataServers...),
 		persistFreq: persistFreq,
+		selector:    selector,
 		planner:     newBlockPlanner(blockSize, selector),
 		store:       newMetadataStore(),
 		persister:   newDiskPersister(persistPath),
@@ -75,9 +81,6 @@ func (s *Server) Listen() error {
 }
 
 func (s *Server) validateConfig() error {
-	if len(s.dataServers) == 0 {
-		return fmt.Errorf("metadata server requires at least one data server")
-	}
 	if s.blockSize <= 0 {
 		return fmt.Errorf("metadata server requires a positive block size")
 	}
@@ -122,6 +125,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = s.deleteFile(req)
 		case "ping":
 			resp = protocol.MetadataResponse{Status: "ok"}
+		case "register_data_server":
+			resp = s.registerDataServer(req)
 		default:
 			resp = protocol.MetadataResponse{Status: "error", Error: "unknown command"}
 		}
@@ -284,6 +289,42 @@ func (s *Server) ListDataServers() []protocol.DataServerHealth {
 		return nil
 	}
 	return s.health.List()
+}
+
+func (s *Server) registerDataServer(req protocol.MetadataRequest) protocol.MetadataResponse {
+	addr := strings.TrimSpace(req.DataServerAddr)
+	if addr == "" {
+		return protocol.MetadataResponse{Status: "error", Error: "missing data_server_addr"}
+	}
+	added := s.ensureDataServer(addr)
+	if s.health != nil {
+		s.health.CheckNow(addr)
+	}
+	if added {
+		log.Printf("metadata: registered data server %s", addr)
+	}
+	return protocol.MetadataResponse{Status: "ok"}
+}
+
+func (s *Server) ensureDataServer(addr string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.dataServers {
+		if existing == addr {
+			if s.health != nil {
+				s.health.EnsureServer(addr)
+			}
+			return false
+		}
+	}
+	s.dataServers = append(s.dataServers, addr)
+	if s.selector != nil {
+		s.selector.SetServers(s.dataServers)
+	}
+	if s.health != nil {
+		s.health.EnsureServer(addr)
+	}
+	return true
 }
 
 // FetchFileBytes downloads a full file from the data servers.

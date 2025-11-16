@@ -12,16 +12,21 @@ import (
 	"strings"
 )
 
-func newUIServer(metadataAddr string, static http.FileSystem) *uiServer {
+func newUIServer(metadataAddr string, static http.FileSystem, downloadConcurrency int) *uiServer {
+	if downloadConcurrency <= 0 {
+		downloadConcurrency = 1
+	}
 	return &uiServer{
-		metadata: newMetadataClient(metadataAddr),
-		static:   static,
+		metadata:            newMetadataClient(metadataAddr),
+		static:              static,
+		downloadConcurrency: downloadConcurrency,
 	}
 }
 
 type uiServer struct {
-	metadata *metadataClient
-	static   http.FileSystem
+	metadata            *metadataClient
+	static              http.FileSystem
+	downloadConcurrency int
 }
 
 func (s *uiServer) routes() http.Handler {
@@ -143,7 +148,7 @@ func (s *uiServer) handleDownload(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
-	data, err := downloadFile(meta)
+	data, err := downloadFile(meta, s.downloadConcurrency)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("download file: %v", err), http.StatusInternalServerError)
 		return

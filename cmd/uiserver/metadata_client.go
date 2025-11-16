@@ -45,6 +45,14 @@ func (c *metadataClient) planFile(name string, size, replicas int) (*protocol.Fi
 	return resp.Metadata, nil
 }
 
+func (c *metadataClient) completeFile(meta *protocol.FileMetadata) error {
+	if meta == nil {
+		return fmt.Errorf("nil metadata")
+	}
+	_, err := c.request(protocol.MetadataRequest{Command: "complete_file", Metadata: meta})
+	return err
+}
+
 func (c *metadataClient) getMetadata(name string) (*protocol.FileMetadata, error) {
 	resp, err := c.request(protocol.MetadataRequest{Command: "get_metadata", FileName: name})
 	if err != nil {

@@ -119,6 +119,11 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.metadata.completeFile(meta); err != nil {
+		http.Error(w, fmt.Sprintf("finalize metadata: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	respondJSON(w, map[string]any{"file": meta})
 }
 

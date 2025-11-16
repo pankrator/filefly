@@ -17,11 +17,12 @@ type DataServerResponse struct {
 
 // MetadataRequest is consumed by the metadata server.
 type MetadataRequest struct {
-	Command  string `json:"command"`
-	FileName string `json:"file_name,omitempty"`
-	Data     string `json:"data,omitempty"`
-	FileSize int    `json:"file_size,omitempty"`
-	Replicas int    `json:"replicas,omitempty"`
+	Command  string        `json:"command"`
+	FileName string        `json:"file_name,omitempty"`
+	Data     string        `json:"data,omitempty"`
+	FileSize int           `json:"file_size,omitempty"`
+	Replicas int           `json:"replicas,omitempty"`
+	Metadata *FileMetadata `json:"metadata,omitempty"`
 }
 
 // BlockReplica describes a copy of a block stored on a specific data server.

@@ -8,25 +8,32 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"filefly/internal/protocol"
 )
 
-// Server keeps blocks in memory. It intentionally keeps everything in process
-// memory so it is easy to reason about for demos and unit tests.
 type Server struct {
-	addr   string
-	blocks map[string][]byte
-	mu     sync.RWMutex
+	addr       string
+	storageDir string
+	mu         sync.RWMutex
 }
 
-// New creates a new data server listening on the provided address.
-func New(addr string) *Server {
-	return &Server{
-		addr:   addr,
-		blocks: make(map[string][]byte),
+// New creates a new data server listening on the provided address and storing
+// block files under the provided directory.
+func New(addr, storageDir string) (*Server, error) {
+	if storageDir == "" {
+		return nil, fmt.Errorf("storage directory is required")
 	}
+	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create storage directory: %w", err)
+	}
+	return &Server{
+		addr:       addr,
+		storageDir: storageDir,
+	}, nil
 }
 
 // Listen starts the TCP server and blocks until the listener fails.
@@ -90,9 +97,12 @@ func (s *Server) store(req protocol.DataServerRequest) protocol.DataServerRespon
 		return protocol.DataServerResponse{Status: "error", Error: "invalid base64 data"}
 	}
 
+	path := s.blockPath(req.BlockID)
 	s.mu.Lock()
-	s.blocks[req.BlockID] = data
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("write block: %v", err)}
+	}
 
 	return protocol.DataServerResponse{Status: "ok"}
 }
@@ -102,12 +112,21 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 		return protocol.DataServerResponse{Status: "error", Error: "missing block_id"}
 	}
 
+	path := s.blockPath(req.BlockID)
 	s.mu.RLock()
-	data, ok := s.blocks[req.BlockID]
+	data, err := os.ReadFile(path)
 	s.mu.RUnlock()
-	if !ok {
-		return protocol.DataServerResponse{Status: "error", Error: "block not found"}
+	if err != nil {
+		if os.IsNotExist(err) {
+			return protocol.DataServerResponse{Status: "error", Error: "block not found"}
+		}
+		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("read block: %v", err)}
 	}
 
 	return protocol.DataServerResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(data)}
+}
+
+func (s *Server) blockPath(blockID string) string {
+	safe := base64.RawURLEncoding.EncodeToString([]byte(blockID))
+	return filepath.Join(s.storageDir, safe)
 }

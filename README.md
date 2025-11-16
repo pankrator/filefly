@@ -4,8 +4,9 @@ FileFly is a tiny Golang project that showcases a metadata service that
 coordinates multiple TCP data servers. The metadata server keeps a catalog of
 files and returns a plan that explains how a payload should be chunked and which
 data server should receive each block. Separate client-side code is responsible
-for pushing the blocks to the data servers using that plan. Data servers only
-store opaque block data in-memory.
+for pushing the blocks to the data servers using that plan. Data servers store
+each block as its own file on disk so their contents survive process restarts
+and can be inspected directly if needed.
 
 The two servers communicate with a minimal JSON protocol that can easily be
 inspected with tools such as `nc` or `socat`.
@@ -14,7 +15,7 @@ inspected with tools such as `nc` or `socat`.
 
 ```
 cmd/
-  dataserver        # binary that stores raw blocks in memory
+  dataserver        # binary that stores raw blocks on disk
   metadataserver    # binary that stores metadata and produces upload plans
 internal/
   dataserver        # TCP server implementation for blocks
@@ -28,7 +29,7 @@ In two terminals run a data server and the metadata server (which references the
 first server via the `--data-servers` flag):
 
 ```bash
-go run ./cmd/dataserver --addr :9001
+go run ./cmd/dataserver --addr :9001 --storage_dir /tmp/filefly-blocks
 ```
 
 ```bash
@@ -60,7 +61,9 @@ REQ
 ```
 
 Repeat this for each block listed in the metadata response, substituting the
-correct payload for each chunk.
+correct payload for each chunk. Blocks written to the data server are persisted
+as individual files below the configured storage directory, so removing a block
+is as simple as deleting that file from the filesystem.
 
 ## Fetching and inspecting metadata
 
@@ -87,7 +90,9 @@ REQ
   upload plans.
 * **data-servers** – comma-separated list of `host:port` pairs for data servers.
   The metadata server picks targets in a simple round-robin order.
+* **storage_dir** – directory used by each data server process to persist block
+  files. Defaults to `./blocks` when running `cmd/dataserver`.
 
-This simple implementation keeps everything in memory and was built for
-educational purposes. It should be straightforward to extend the servers with
-persistence or authentication if desired.
+This simple implementation was built for educational purposes. It should be
+straightforward to extend the servers with authentication, replication, or other
+production-oriented features.

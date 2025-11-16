@@ -20,6 +20,7 @@ type MetadataRequest struct {
 	Command  string `json:"command"`
 	FileName string `json:"file_name,omitempty"`
 	Data     string `json:"data,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
 }
 
 // BlockRef is the metadata for a block.

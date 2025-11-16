@@ -95,36 +95,19 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	if req.FileName == "" {
 		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
 	}
-	raw, err := base64.StdEncoding.DecodeString(req.Data)
-	if err != nil {
-		return protocol.MetadataResponse{Status: "error", Error: "invalid base64 data"}
-	}
 	if s.blockSize <= 0 {
 		return protocol.MetadataResponse{Status: "error", Error: "invalid block size"}
 	}
 
-	blocks := make([]protocol.BlockRef, 0, len(raw)/s.blockSize+1)
-	for offset := 0; offset < len(raw); offset += s.blockSize {
-		end := offset + s.blockSize
-		if end > len(raw) {
-			end = len(raw)
-		}
-		chunk := raw[offset:end]
-		blockID := fmt.Sprintf("%s-%d", req.FileName, len(blocks))
-		dataServer := s.nextDataServer()
-		if err := s.pushBlock(dataServer, blockID, chunk); err != nil {
-			return protocol.MetadataResponse{Status: "error", Error: err.Error()}
-		}
-		blocks = append(blocks, protocol.BlockRef{
-			ID:         blockID,
-			DataServer: dataServer,
-			Size:       len(chunk),
-		})
+	totalSize, err := s.determineFileSize(req)
+	if err != nil {
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
 
+	blocks := s.planBlocks(req.FileName, totalSize)
 	meta := protocol.FileMetadata{
 		Name:      req.FileName,
-		TotalSize: len(raw),
+		TotalSize: totalSize,
 		Blocks:    blocks,
 	}
 
@@ -133,6 +116,42 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 	s.mu.Unlock()
 
 	return protocol.MetadataResponse{Status: "ok", Metadata: &meta}
+}
+
+func (s *Server) determineFileSize(req protocol.MetadataRequest) (int, error) {
+	if req.FileSize > 0 {
+		return req.FileSize, nil
+	}
+	if req.Data != "" {
+		raw, err := base64.StdEncoding.DecodeString(req.Data)
+		if err != nil {
+			return 0, fmt.Errorf("invalid base64 data")
+		}
+		return len(raw), nil
+	}
+	return 0, fmt.Errorf("missing file_size or data")
+}
+
+func (s *Server) planBlocks(fileName string, totalSize int) []protocol.BlockRef {
+	if totalSize == 0 {
+		return nil
+	}
+	blocks := make([]protocol.BlockRef, 0, totalSize/s.blockSize+1)
+	remaining := totalSize
+	for remaining > 0 {
+		chunkSize := s.blockSize
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+		blockID := fmt.Sprintf("%s-%d", fileName, len(blocks))
+		blocks = append(blocks, protocol.BlockRef{
+			ID:         blockID,
+			DataServer: s.nextDataServer(),
+			Size:       chunkSize,
+		})
+		remaining -= chunkSize
+	}
+	return blocks
 }
 
 func (s *Server) fetchFile(req protocol.MetadataRequest) protocol.MetadataResponse {
@@ -180,33 +199,6 @@ func (s *Server) nextDataServer() string {
 	addr := s.dataServers[s.rrNext%len(s.dataServers)]
 	s.rrNext++
 	return addr
-}
-
-func (s *Server) pushBlock(addr, blockID string, data []byte) error {
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("connect to data server %s: %w", addr, err)
-	}
-	defer conn.Close()
-
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(bufio.NewReader(conn))
-	req := protocol.DataServerRequest{
-		Command: "store",
-		BlockID: blockID,
-		Data:    base64.StdEncoding.EncodeToString(data),
-	}
-	if err := enc.Encode(req); err != nil {
-		return fmt.Errorf("send block to %s: %w", addr, err)
-	}
-	var resp protocol.DataServerResponse
-	if err := dec.Decode(&resp); err != nil {
-		return fmt.Errorf("decode response from %s: %w", addr, err)
-	}
-	if resp.Status != "ok" {
-		return fmt.Errorf("data server %s error: %s", addr, resp.Error)
-	}
-	return nil
 }
 
 func (s *Server) pullBlock(addr, blockID string) ([]byte, error) {

@@ -118,6 +118,22 @@ cat <<'REQ' | nc localhost 9000
 REQ
 ```
 
+## Deleting files
+
+Remove a file from the cluster and its metadata entry by issuing the
+`delete_file` command. The metadata server removes the record and instructs
+each data server replica to delete its block files:
+
+```bash
+cat <<'REQ' | nc localhost 9000
+{"command":"delete_file","file_name":"hello.txt"}
+REQ
+```
+
+The browser UI also exposes a **Delete** button in the file details panel,
+which calls the same API and refreshes the file list after the blocks are
+removed.
+
 ## Configuration
 
 * **block-size** – size of the chunks the metadata server creates when building

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +100,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = s.getMetadata(req)
 		case "list_files":
 			resp = s.listFilesResponse()
+		case "delete_file":
+			resp = s.deleteFile(req)
 		case "ping":
 			resp = protocol.MetadataResponse{Status: "ok"}
 		default:
@@ -335,6 +338,29 @@ func (s *Server) listFilesResponse() protocol.MetadataResponse {
 	return protocol.MetadataResponse{Status: "ok", Files: s.ListFiles()}
 }
 
+func (s *Server) deleteFile(req protocol.MetadataRequest) protocol.MetadataResponse {
+	if req.FileName == "" {
+		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
+	}
+
+	s.mu.RLock()
+	meta, ok := s.files[req.FileName]
+	s.mu.RUnlock()
+	if !ok {
+		return protocol.MetadataResponse{Status: "error", Error: "file not found"}
+	}
+
+	if err := s.deleteFileBlocks(meta); err != nil {
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
+	}
+
+	s.mu.Lock()
+	delete(s.files, req.FileName)
+	s.mu.Unlock()
+
+	return protocol.MetadataResponse{Status: "ok"}
+}
+
 // ListFiles returns all known metadata entries sorted by name.
 func (s *Server) ListFiles() []protocol.FileMetadata {
 	s.mu.RLock()
@@ -422,4 +448,54 @@ func (s *Server) pullBlock(addr, blockID string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid base64 from %s: %w", addr, err)
 	}
 	return data, nil
+}
+
+func (s *Server) deleteFileBlocks(meta protocol.FileMetadata) error {
+	var errs []string
+	for _, block := range meta.Blocks {
+		replicas := normalizeBlockReplicas(block)
+		for _, replica := range replicas {
+			if replica.DataServer == "" {
+				continue
+			}
+			if err := s.sendDelete(replica.DataServer, block.ID); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("delete file %s: %s", meta.Name, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (s *Server) sendDelete(addr, blockID string) error {
+	dialer := &net.Dialer{Timeout: replicaFetchTimeout}
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("connect to data server %s: %w", addr, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(replicaFetchTimeout))
+
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(bufio.NewReader(conn))
+	req := protocol.DataServerRequest{
+		Command: "delete",
+		BlockID: blockID,
+	}
+	if err := enc.Encode(req); err != nil {
+		return fmt.Errorf("send delete to %s: %w", addr, err)
+	}
+	var resp protocol.DataServerResponse
+	if err := dec.Decode(&resp); err != nil {
+		return fmt.Errorf("decode response from %s: %w", addr, err)
+	}
+	if resp.Status != "ok" {
+		if resp.Error == "" {
+			resp.Error = "data server returned error"
+		}
+		return fmt.Errorf("data server %s: %s", addr, resp.Error)
+	}
+	return nil
 }

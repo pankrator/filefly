@@ -56,6 +56,11 @@ func (c *metadataClient) getMetadata(name string) (*protocol.FileMetadata, error
 	return resp.Metadata, nil
 }
 
+func (c *metadataClient) deleteFile(name string) error {
+	_, err := c.request(protocol.MetadataRequest{Command: "delete_file", FileName: name})
+	return err
+}
+
 func (c *metadataClient) request(req protocol.MetadataRequest) (*protocol.MetadataResponse, error) {
 	conn, err := net.Dial("tcp", c.addr)
 	if err != nil {

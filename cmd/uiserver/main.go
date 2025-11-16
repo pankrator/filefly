@@ -21,6 +21,7 @@ func main() {
 	}
 
 	srv := newUIServer(*metadataAddr, http.FS(staticFS), *downloadConcurrency)
+	defer srv.Close()
 
 	log.Printf("UI server listening on %s (metadata=%s)", *addr, *metadataAddr)
 	if err := http.ListenAndServe(*addr, srv.routes()); err != nil {

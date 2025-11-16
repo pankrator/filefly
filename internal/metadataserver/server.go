@@ -339,26 +339,26 @@ func (s *Server) listFilesResponse() protocol.MetadataResponse {
 }
 
 func (s *Server) deleteFile(req protocol.MetadataRequest) protocol.MetadataResponse {
-	if req.FileName == "" {
-		return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
-	}
+        if req.FileName == "" {
+                return protocol.MetadataResponse{Status: "error", Error: "missing file_name"}
+        }
 
-	s.mu.RLock()
-	meta, ok := s.files[req.FileName]
-	s.mu.RUnlock()
-	if !ok {
-		return protocol.MetadataResponse{Status: "error", Error: "file not found"}
-	}
+        s.mu.Lock()
+        meta, ok := s.files[req.FileName]
+        if !ok {
+                s.mu.Unlock()
+                return protocol.MetadataResponse{Status: "error", Error: "file not found"}
+        }
 
-	if err := s.deleteFileBlocks(meta); err != nil {
-		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
-	}
+        if err := s.deleteFileBlocks(meta); err != nil {
+                s.mu.Unlock()
+                return protocol.MetadataResponse{Status: "error", Error: err.Error()}
+        }
 
-	s.mu.Lock()
-	delete(s.files, req.FileName)
-	s.mu.Unlock()
+        delete(s.files, req.FileName)
+        s.mu.Unlock()
 
-	return protocol.MetadataResponse{Status: "ok"}
+        return protocol.MetadataResponse{Status: "ok"}
 }
 
 // ListFiles returns all known metadata entries sorted by name.

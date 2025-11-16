@@ -6,6 +6,7 @@ const uploadForm = document.getElementById("upload-form");
 const uploadStatus = document.getElementById("upload-status");
 const fileInput = document.getElementById("file-input");
 const fileNameInput = document.getElementById("file-name");
+const fileReplicasInput = document.getElementById("file-replicas");
 const fileTemplate = document.getElementById("file-template");
 const blockTemplate = document.getElementById("block-template");
 
@@ -85,7 +86,10 @@ function renderFileDetails(file) {
       const row = blockTemplate.content.firstElementChild.cloneNode(true);
       const [idCell, serverCell, sizeCell] = row.children;
       idCell.textContent = block.id;
-      serverCell.textContent = block.data_server || block.dataServer;
+      const replicas = Array.isArray(block.replicas)
+        ? block.replicas.map((rep) => rep.data_server || rep.dataServer)
+        : [block.data_server || block.dataServer || "unknown"];
+      serverCell.textContent = replicas.filter(Boolean).join(", ");
       sizeCell.textContent = `${block.size} B`;
       return row;
     });
@@ -93,14 +97,14 @@ function renderFileDetails(file) {
   fileDetailsEl.innerHTML = `
     <div class="detail-header">
       <h3>${file.name}</h3>
-      <p>Total size: ${file.total_size ?? file.totalSize} bytes</p>
+      <p>Total size: ${file.total_size ?? file.totalSize} bytes · Replicas per block: ${file.replicas ?? file.replication_factor ?? 1}</p>
       <button type="button" id="download-btn">Download</button>
     </div>
     <table>
       <thead>
         <tr>
           <th>Block ID</th>
-          <th>Data server</th>
+          <th>Data servers</th>
           <th>Size</th>
         </tr>
       </thead>
@@ -152,6 +156,9 @@ async function handleUpload(event) {
   formData.append("file", fileInput.files[0]);
   if (fileNameInput.value.trim()) {
     formData.append("name", fileNameInput.value.trim());
+  }
+  if (fileReplicasInput.value.trim()) {
+    formData.append("replicas", fileReplicasInput.value.trim());
   }
 
   try {

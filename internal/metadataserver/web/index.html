@@ -40,6 +40,10 @@
             Remote name (optional)
             <input type="text" id="file-name" name="name" placeholder="Defaults to local file name" />
           </label>
+          <label>
+            Replicas per block
+            <input type="number" id="file-replicas" name="replicas" min="1" value="1" />
+          </label>
           <button type="submit">Upload</button>
           <p id="upload-status" class="status"></p>
         </form>

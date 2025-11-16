@@ -21,13 +21,22 @@ type MetadataRequest struct {
 	FileName string `json:"file_name,omitempty"`
 	Data     string `json:"data,omitempty"`
 	FileSize int    `json:"file_size,omitempty"`
+	Replicas int    `json:"replicas,omitempty"`
+}
+
+// BlockReplica describes a copy of a block stored on a specific data server.
+type BlockReplica struct {
+	DataServer string `json:"data_server"`
 }
 
 // BlockRef is the metadata for a block.
 type BlockRef struct {
-	ID         string `json:"id"`
-	DataServer string `json:"data_server"`
-	Size       int    `json:"size"`
+	ID       string         `json:"id"`
+	Size     int            `json:"size"`
+	Replicas []BlockReplica `json:"replicas"`
+	// DataServer is deprecated but kept for backward compatibility with
+	// persisted metadata written before replication support.
+	DataServer string `json:"data_server,omitempty"`
 }
 
 // FileMetadata keeps track of how a file is distributed among data servers.
@@ -35,6 +44,7 @@ type FileMetadata struct {
 	Name      string     `json:"name"`
 	TotalSize int        `json:"total_size"`
 	Blocks    []BlockRef `json:"blocks"`
+	Replicas  int        `json:"replicas"`
 }
 
 // MetadataResponse is returned by the metadata server.

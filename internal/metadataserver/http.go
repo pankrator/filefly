@@ -61,6 +61,9 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing file", http.StatusBadRequest)

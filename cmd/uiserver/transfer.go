@@ -8,6 +8,8 @@ import (
 	"net"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"filefly/internal/protocol"
 )
 
@@ -68,16 +70,36 @@ func uploadReplica(blockID string, replica protocol.BlockReplica, data []byte) e
 	return nil
 }
 
-func downloadFile(meta *protocol.FileMetadata) ([]byte, error) {
+func downloadFile(meta *protocol.FileMetadata, maxConcurrency int) ([]byte, error) {
 	if meta == nil {
 		return nil, fmt.Errorf("metadata is nil")
 	}
+	if maxConcurrency <= 0 {
+		maxConcurrency = 1
+	}
+	blks := meta.Blocks
+	chunks := make([][]byte, len(blks))
+	sem := make(chan struct{}, maxConcurrency)
+	var eg errgroup.Group
+	for i := range blks {
+		i := i
+		block := blks[i]
+		eg.Go(func() error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			chunk, err := fetchBlockWithFailover(block)
+			if err != nil {
+				return err
+			}
+			chunks[i] = chunk
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
 	buf := make([]byte, 0, meta.TotalSize)
-	for _, block := range meta.Blocks {
-		chunk, err := fetchBlockWithFailover(block)
-		if err != nil {
-			return nil, err
-		}
+	for _, chunk := range chunks {
 		buf = append(buf, chunk...)
 	}
 	return buf, nil

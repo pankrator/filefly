@@ -47,6 +47,9 @@ to both the metadata server and the data servers on behalf of the browser):
 go run ./cmd/uiserver --addr :8090 --metadata-server localhost:9000
 ```
 
+Pass `--download-concurrency` to control how many blocks the UI server retrieves
+from the data servers at the same time when downloading files.
+
 Visit `http://localhost:8090` to interact with the UI. Browser requests to
 `/api/*` are handled by the UI server, which fetches metadata from the metadata
 server and streams payloads to and from the data servers.
@@ -127,6 +130,8 @@ REQ
   a JSON snapshot of its in-memory state so uploads survive restarts.
 * **persist-interval** – duration between metadata snapshots. Set to `0s` to
   disable automatic persistence.
+* **download-concurrency** – UI server flag that limits how many block replicas
+  are fetched in parallel while reconstructing a file.
 
 This simple implementation was built for educational purposes. It should be
 straightforward to extend the servers with authentication, replication, or other

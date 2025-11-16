@@ -43,7 +43,11 @@ services:
   ui:
     image: golang:1.21
     working_dir: /app
-    command: go run ./cmd/uiserver --addr :8090 --metadata-server metadata:9100
+    command: >-
+      go run ./cmd/uiserver
+      --addr :8090
+      --metadata-server metadata:9100
+      --download-concurrency 4
     volumes:
       - .:/app:ro
     ports:

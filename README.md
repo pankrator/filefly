@@ -65,6 +65,19 @@ correct payload for each chunk. Blocks written to the data server are persisted
 as individual files below the configured storage directory, so removing a block
 is as simple as deleting that file from the filesystem.
 
+## Uploading files with the CLI client
+
+The `cmd/client` helper automates the metadata and data server interactions. It
+requests an upload plan from the metadata server and then pushes each chunk to
+the data servers listed in that plan.
+
+```bash
+go run ./cmd/client --metadata-server :9000 --file ./hello.txt
+```
+
+The remote file name defaults to the base name of the local path. Use
+`--name=my-remote-name` to override it.
+
 ## Fetching and inspecting metadata
 
 Fetch the file content (still base64 encoded) by sending another command to the

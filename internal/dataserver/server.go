@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"filefly/internal/protocol"
 )
@@ -20,9 +19,6 @@ type Server struct {
 	addr       string
 	storageDir string
 	mu         sync.RWMutex
-
-	metadataAddr     string
-	metadataInterval time.Duration
 }
 
 // New creates a new data server listening on the provided address and storing
@@ -47,17 +43,6 @@ func (s *Server) Listen() error {
 		return fmt.Errorf("dataserver listen: %w", err)
 	}
 	defer ln.Close()
-	var registrar *metadataRegistrar
-	if s.metadataAddr != "" {
-		interval := s.metadataInterval
-		if interval <= 0 {
-			interval = defaultMetadataPingInterval
-		}
-		registrar = newMetadataRegistrar(s.metadataAddr, s.addr, interval)
-		registrar.Start()
-		defer registrar.Stop()
-	}
-
 	log.Printf("data server listening on %s", s.addr)
 	for {
 		conn, err := ln.Accept()

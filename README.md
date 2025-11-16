@@ -29,12 +29,10 @@ ui/
 ## Running the servers
 
 In two terminals run a data server and the metadata server (which references the
-first server via the `--data-servers` flag). Passing `--metadata-server` to the
-data server makes it periodically ping the metadata (name) server so it can
-re-register itself after restarts:
+first server via the `--data-servers` flag):
 
 ```bash
-go run ./cmd/dataserver --addr :9001 --storage_dir /tmp/filefly-blocks --metadata-server :9000
+go run ./cmd/dataserver --addr :9001 --storage_dir /tmp/filefly-blocks
 ```
 
 ```bash
@@ -154,10 +152,6 @@ removed.
   upload plans.
 * **data-servers** – comma-separated list of `host:port` pairs for data servers.
   The metadata server picks targets in a simple round-robin order.
-* **metadata-server** – data server flag pointing at the metadata server so the
-  data node can re-register automatically after interruptions.
-* **metadata-ping-interval** – data server flag that controls how often the
-  metadata server is pinged for registration (defaults to 15 seconds).
 * **storage_dir** – directory used by each data server process to persist block
   files. Defaults to `./blocks` when running `cmd/dataserver`.
 * **metadata-file** – optional path where the metadata server periodically writes

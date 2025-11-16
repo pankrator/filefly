@@ -4,7 +4,7 @@ services:
   dataserver1:
     image: golang:1.21
     working_dir: /app
-    command: go run ./cmd/dataserver --addr :9101 --storage_dir /blocks --metadata-server metadata:9100
+    command: go run ./cmd/dataserver --addr :9101 --storage_dir /blocks
     volumes:
       - .:/app
       - blocks1:/blocks
@@ -14,7 +14,7 @@ services:
   dataserver2:
     image: golang:1.21
     working_dir: /app
-    command: go run ./cmd/dataserver --addr :9102 --storage_dir /blocks --metadata-server metadata:9100
+    command: go run ./cmd/dataserver --addr :9102 --storage_dir /blocks
     volumes:
       - .:/app
       - blocks2:/blocks

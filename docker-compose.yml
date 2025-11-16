@@ -36,10 +36,20 @@ services:
       - metadata:/metadata
     ports:
       - "9100:9100"
-      - "8090:8090"
     depends_on:
       - dataserver1
       - dataserver2
+
+  ui:
+    image: golang:1.21
+    working_dir: /app
+    command: go run ./cmd/uiserver --addr :8090 --metadata-api http://metadata:8090
+    volumes:
+      - .:/app:ro
+    ports:
+      - "8090:8090"
+    depends_on:
+      - metadata
 
 volumes:
   blocks1:

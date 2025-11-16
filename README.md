@@ -17,10 +17,13 @@ inspected with tools such as `nc` or `socat`.
 cmd/
   dataserver        # binary that stores raw blocks on disk
   metadataserver    # binary that stores metadata and produces upload plans
+  uiserver          # binary that serves the web UI and proxies metadata APIs
 internal/
   dataserver        # TCP server implementation for blocks
   metadataserver    # metadata server implementation
   protocol          # shared wire types
+ui/
+  static            # browser UI embedded in the uiserver binary
 ```
 
 ## Running the servers
@@ -35,6 +38,18 @@ go run ./cmd/dataserver --addr :9001 --storage_dir /tmp/filefly-blocks
 ```bash
 go run ./cmd/metadataserver --addr :9000 --block-size 8 --data-servers :9001
 ```
+
+To serve the browser UI from the same origin as the metadata HTTP API, start the
+UI proxy and point it at the metadata server's HTTP listener (enabled by default
+on `:8090`):
+
+```bash
+go run ./cmd/uiserver --addr :8090 --metadata-api http://localhost:8090
+```
+
+Visit `http://localhost:8090` to interact with the UI. Requests to `/api/*` are
+forwarded to the metadata HTTP API, so uploads and downloads still flow through
+the metadata server.
 
 ## Planning uploads for a file
 

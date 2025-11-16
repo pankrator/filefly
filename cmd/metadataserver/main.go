@@ -10,12 +10,12 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "address to listen on")
+	addr := flag.String("addr", ":8080", "TCP address for the internal metadata protocol")
 	blockSize := flag.Int("block-size", 1024, "block size in bytes")
 	dataServers := flag.String("data-servers", ":8081", "comma separated list of data server addresses")
 	metadataFile := flag.String("metadata-file", "metadata.json", "path to persist metadata snapshots")
 	persistInterval := flag.Duration("persist-interval", 30*time.Second, "how often to persist metadata")
-	httpAddr := flag.String("http-addr", ":8090", "address for the optional web UI (empty to disable)")
+	httpAddr := flag.String("http-addr", ":8090", "address for the metadata HTTP API consumed by the UI proxy (empty to disable)")
 	flag.Parse()
 
 	var servers []string

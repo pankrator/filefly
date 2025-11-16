@@ -1,11 +1,9 @@
 package metadataserver
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -14,16 +12,13 @@ import (
 	"strings"
 )
 
-//go:embed web/*
-var webFS embed.FS
-
-// ListenHTTP starts the HTTP server that hosts the UI and API.
+// ListenHTTP starts the HTTP server that hosts the metadata API.
 func (s *Server) ListenHTTP(addr string) error {
 	handler, err := s.httpHandler()
 	if err != nil {
 		return err
 	}
-	log.Printf("metadata HTTP UI listening on %s", addr)
+	log.Printf("metadata HTTP API listening on %s", addr)
 	return http.ListenAndServe(addr, handler)
 }
 
@@ -31,13 +26,6 @@ func (s *Server) httpHandler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/files/", s.handleFileDetail)
-
-	staticFS, err := fs.Sub(webFS, "web")
-	if err != nil {
-		return nil, fmt.Errorf("prepare web assets: %w", err)
-	}
-	fileServer := http.FileServer(http.FS(staticFS))
-	mux.Handle("/", fileServer)
 	return mux, nil
 }
 

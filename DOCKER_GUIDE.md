@@ -14,12 +14,12 @@ from your local machine into one of the running data server containers.
    ```bash
    docker compose up -d
    ```
-2. Confirm that the three services are healthy:
+2. Confirm that the four services are healthy:
    ```bash
    docker compose ps
    ```
-   The `metadata`, `dataserver1`, and `dataserver2` services should all report a
-   `running` state.
+   The `metadata`, `dataserver1`, `dataserver2`, and `ui` services should all
+   report a `running` state.
 3. Tail the metadata logs (optional) to observe requests and snapshot activity:
    ```bash
    docker compose logs -f metadata
@@ -56,6 +56,11 @@ machine:
 * Metadata server: `localhost:9100`
 * Data server 1: `localhost:9101`
 * Data server 2: `localhost:9102`
+* UI proxy + static assets: `localhost:8090`
+
+The `ui` container embeds the web assets and proxies `/api/*` requests to the
+metadata HTTP API running inside the `metadata` container, so the browser can
+talk to both layers from the same origin.
 
 Follow these steps to push a file stored on your machine into the cluster using
 the provided CLI client, which automates the metadata and data server

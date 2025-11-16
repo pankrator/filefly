@@ -76,7 +76,10 @@ go run ./cmd/client --metadata-server :9000 --file ./hello.txt
 ```
 
 The remote file name defaults to the base name of the local path. Use
-`--name=my-remote-name` to override it.
+`--name=my-remote-name` to override it. Replicate each block across multiple
+data servers with `--replicas=<n>` (the default is one replica per block). Each
+replica is written to a distinct data server, so the requested count cannot
+exceed the number of configured servers.
 
 ## Fetching and inspecting metadata
 

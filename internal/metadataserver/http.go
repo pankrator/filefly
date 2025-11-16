@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -86,7 +87,17 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := s.StoreFileBytes(name, data)
+	replicas := 0
+	if raw := strings.TrimSpace(r.FormValue("replicas")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			http.Error(w, "replicas must be a positive number", http.StatusBadRequest)
+			return
+		}
+		replicas = value
+	}
+
+	meta, err := s.StoreFileBytes(name, data, replicas)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

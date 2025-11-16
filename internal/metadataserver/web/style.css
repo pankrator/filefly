@@ -56,7 +56,8 @@ main {
 
 button,
 input[type="file"],
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   font: inherit;
 }
 
@@ -136,7 +137,8 @@ label {
 }
 
 input[type="file"],
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   border: 1px solid #d0d5dd;
   padding: 0.6rem;
   border-radius: 10px;

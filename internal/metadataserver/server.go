@@ -124,7 +124,11 @@ func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*pr
 	if err != nil {
 		return nil, err
 	}
-	meta, err := s.planFileMetadata(name, totalSize)
+	replicas, err := s.resolveReplicas(req.Replicas)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := s.planFileMetadata(name, totalSize, replicas)
 	if err != nil {
 		return nil, err
 	}
@@ -134,15 +138,19 @@ func (s *Server) planAndSaveFile(name string, req protocol.MetadataRequest) (*pr
 	return meta, nil
 }
 
-func (s *Server) planFileMetadata(name string, totalSize int) (*protocol.FileMetadata, error) {
+func (s *Server) planFileMetadata(name string, totalSize, replicas int) (*protocol.FileMetadata, error) {
 	if s.blockSize <= 0 {
 		return nil, fmt.Errorf("invalid block size")
 	}
-	blocks := s.planBlocks(name, totalSize)
+	blocks, err := s.planBlocks(name, totalSize, replicas)
+	if err != nil {
+		return nil, err
+	}
 	meta := protocol.FileMetadata{
 		Name:      name,
 		TotalSize: totalSize,
 		Blocks:    blocks,
+		Replicas:  replicas,
 	}
 	return &meta, nil
 }
@@ -238,9 +246,15 @@ func (s *Server) loadFromDisk() error {
 	return nil
 }
 
-func (s *Server) planBlocks(fileName string, totalSize int) []protocol.BlockRef {
+func (s *Server) planBlocks(fileName string, totalSize, replicas int) ([]protocol.BlockRef, error) {
 	if totalSize == 0 {
-		return nil
+		return nil, nil
+	}
+	if replicas <= 0 {
+		return nil, fmt.Errorf("replica count must be at least 1")
+	}
+	if replicas > len(s.dataServers) {
+		return nil, fmt.Errorf("replica count %d exceeds available data servers (%d)", replicas, len(s.dataServers))
 	}
 	blocks := make([]protocol.BlockRef, 0, totalSize/s.blockSize+1)
 	remaining := totalSize
@@ -250,14 +264,41 @@ func (s *Server) planBlocks(fileName string, totalSize int) []protocol.BlockRef 
 			chunkSize = remaining
 		}
 		blockID := fmt.Sprintf("%s-%d", fileName, len(blocks))
+		refs := make([]protocol.BlockReplica, 0, replicas)
+		for i := 0; i < replicas; i++ {
+			refs = append(refs, protocol.BlockReplica{DataServer: s.nextDataServer()})
+		}
 		blocks = append(blocks, protocol.BlockRef{
-			ID:         blockID,
-			DataServer: s.nextDataServer(),
-			Size:       chunkSize,
+			ID:       blockID,
+			Size:     chunkSize,
+			Replicas: refs,
 		})
 		remaining -= chunkSize
 	}
-	return blocks
+	return blocks, nil
+}
+
+func (s *Server) resolveReplicas(requested int) (int, error) {
+	if requested <= 0 {
+		requested = 1
+	}
+	if len(s.dataServers) == 0 {
+		return 0, fmt.Errorf("no data servers configured")
+	}
+	if requested > len(s.dataServers) {
+		return 0, fmt.Errorf("replica count %d exceeds available data servers (%d)", requested, len(s.dataServers))
+	}
+	return requested, nil
+}
+
+func normalizeBlockReplicas(block protocol.BlockRef) []protocol.BlockReplica {
+	if len(block.Replicas) > 0 {
+		return block.Replicas
+	}
+	if block.DataServer != "" {
+		return []protocol.BlockReplica{{DataServer: block.DataServer}}
+	}
+	return nil
 }
 
 func (s *Server) fetchFile(req protocol.MetadataRequest) protocol.MetadataResponse {
@@ -301,14 +342,18 @@ func (s *Server) ListFiles() []protocol.FileMetadata {
 }
 
 // StoreFileBytes stores a file and uploads its blocks to the data servers.
-func (s *Server) StoreFileBytes(name string, data []byte) (*protocol.FileMetadata, error) {
+func (s *Server) StoreFileBytes(name string, data []byte, replicas int) (*protocol.FileMetadata, error) {
 	if name == "" {
 		return nil, fmt.Errorf("missing file name")
 	}
 	if len(s.dataServers) == 0 {
 		return nil, fmt.Errorf("no data servers configured")
 	}
-	meta, err := s.planFileMetadata(name, len(data))
+	resolvedReplicas, err := s.resolveReplicas(replicas)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := s.planFileMetadata(name, len(data), resolvedReplicas)
 	if err != nil {
 		return nil, err
 	}
@@ -331,11 +376,22 @@ func (s *Server) FetchFileBytes(name string) ([]byte, *protocol.FileMetadata, er
 	}
 	buf := make([]byte, 0, meta.TotalSize)
 	for _, block := range meta.Blocks {
-		data, err := s.pullBlock(block.DataServer, block.ID)
-		if err != nil {
-			return nil, nil, err
+		replicas := normalizeBlockReplicas(block)
+		if len(replicas) == 0 {
+			return nil, nil, fmt.Errorf("block %s has no replicas", block.ID)
 		}
-		buf = append(buf, data...)
+		var chunk []byte
+		var lastErr error
+		for _, replica := range replicas {
+			chunk, lastErr = s.pullBlock(replica.DataServer, block.ID)
+			if lastErr == nil {
+				break
+			}
+		}
+		if lastErr != nil {
+			return nil, nil, fmt.Errorf("retrieve block %s: %w", block.ID, lastErr)
+		}
+		buf = append(buf, chunk...)
 	}
 	return buf, &meta, nil
 }
@@ -343,13 +399,19 @@ func (s *Server) FetchFileBytes(name string) ([]byte, *protocol.FileMetadata, er
 func (s *Server) uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 	offset := 0
 	for _, block := range blocks {
+		replicas := normalizeBlockReplicas(block)
+		if len(replicas) == 0 {
+			return fmt.Errorf("block %s has no replicas to upload", block.ID)
+		}
 		end := offset + block.Size
 		if end > len(data) {
 			return fmt.Errorf("block %s exceeds file size", block.ID)
 		}
 		chunk := data[offset:end]
-		if err := s.pushBlock(block, chunk); err != nil {
-			return err
+		for _, replica := range replicas {
+			if err := s.pushReplica(block.ID, replica, chunk); err != nil {
+				return err
+			}
 		}
 		offset = end
 	}
@@ -359,10 +421,10 @@ func (s *Server) uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 	return nil
 }
 
-func (s *Server) pushBlock(block protocol.BlockRef, data []byte) error {
-	conn, err := net.Dial("tcp", block.DataServer)
+func (s *Server) pushReplica(blockID string, replica protocol.BlockReplica, data []byte) error {
+	conn, err := net.Dial("tcp", replica.DataServer)
 	if err != nil {
-		return fmt.Errorf("connect to data server %s: %w", block.DataServer, err)
+		return fmt.Errorf("connect to data server %s: %w", replica.DataServer, err)
 	}
 	defer conn.Close()
 
@@ -370,21 +432,21 @@ func (s *Server) pushBlock(block protocol.BlockRef, data []byte) error {
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	req := protocol.DataServerRequest{
 		Command: "store",
-		BlockID: block.ID,
+		BlockID: blockID,
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
 	if err := enc.Encode(req); err != nil {
-		return fmt.Errorf("send store to %s: %w", block.DataServer, err)
+		return fmt.Errorf("send store to %s: %w", replica.DataServer, err)
 	}
 	var resp protocol.DataServerResponse
 	if err := dec.Decode(&resp); err != nil {
-		return fmt.Errorf("decode response from %s: %w", block.DataServer, err)
+		return fmt.Errorf("decode response from %s: %w", replica.DataServer, err)
 	}
 	if resp.Status != "ok" {
 		if resp.Error == "" {
 			resp.Error = "data server returned error"
 		}
-		return fmt.Errorf("data server %s: %s", block.DataServer, resp.Error)
+		return fmt.Errorf("data server %s: %s", replica.DataServer, resp.Error)
 	}
 	return nil
 }

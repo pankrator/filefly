@@ -1,10 +1,10 @@
-package metadataserver
+package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -12,40 +12,47 @@ import (
 	"strings"
 )
 
-// ListenHTTP starts the HTTP server that hosts the metadata API.
-func (s *Server) ListenHTTP(addr string) error {
-	handler, err := s.httpHandler()
-	if err != nil {
-		return err
+func newUIServer(metadataAddr string, static http.FileSystem) *uiServer {
+	return &uiServer{
+		metadata: newMetadataClient(metadataAddr),
+		static:   static,
 	}
-	log.Printf("metadata HTTP API listening on %s", addr)
-	return http.ListenAndServe(addr, handler)
 }
 
-func (s *Server) httpHandler() (http.Handler, error) {
+type uiServer struct {
+	metadata *metadataClient
+	static   http.FileSystem
+}
+
+func (s *uiServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/files/", s.handleFileDetail)
-	return mux, nil
+	mux.Handle("/", http.FileServer(s.static))
+	return mux
 }
 
-func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+func (s *uiServer) handleFiles(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.handleListFiles(w, r)
 	case http.MethodPost:
-		s.handleUploadFile(w, r)
+		s.handleUpload(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) handleListFiles(w http.ResponseWriter, _ *http.Request) {
-	files := s.ListFiles()
+func (s *uiServer) handleListFiles(w http.ResponseWriter, _ *http.Request) {
+	files, err := s.metadata.listFiles()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("list files: %v", err), http.StatusInternalServerError)
+		return
+	}
 	respondJSON(w, map[string]any{"files": files})
 }
 
-func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
+func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -53,6 +60,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	if r.MultipartForm != nil {
 		defer r.MultipartForm.RemoveAll()
 	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing file", http.StatusBadRequest)
@@ -85,16 +93,21 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		replicas = value
 	}
 
-	meta, err := s.StoreFileBytes(name, data, replicas)
+	meta, err := s.metadata.planFile(name, len(data), replicas)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("plan file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if err := uploadBlocks(meta.Blocks, data); err != nil {
+		http.Error(w, fmt.Sprintf("upload blocks: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	respondJSON(w, map[string]any{"file": meta})
 }
 
-func (s *Server) handleFileDetail(w http.ResponseWriter, r *http.Request) {
+func (s *uiServer) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/files/")
 	if trimmed == "" {
 		http.NotFound(w, r)
@@ -108,36 +121,46 @@ func (s *Server) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) > 1 {
 		if parts[1] == "content" {
-			s.handleDownloadFile(w, name)
+			s.handleDownload(w, r, name)
 			return
 		}
 		http.NotFound(w, r)
 		return
 	}
 
-	s.mu.RLock()
-	meta, ok := s.files[name]
-	s.mu.RUnlock()
-	if !ok {
-		http.NotFound(w, r)
+	meta, err := s.metadata.getMetadata(name)
+	if err != nil {
+		s.handleMetadataError(w, r, err)
 		return
 	}
 	respondJSON(w, map[string]any{"file": meta})
 }
 
-func (s *Server) handleDownloadFile(w http.ResponseWriter, name string) {
-	data, meta, err := s.FetchFileBytes(name)
+func (s *uiServer) handleDownload(w http.ResponseWriter, r *http.Request, name string) {
+	meta, err := s.metadata.getMetadata(name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		s.handleMetadataError(w, r, err)
 		return
 	}
+
+	data, err := downloadFile(meta)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("download file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
-	if meta != nil {
-		safeName := path.Base(meta.Name)
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", safeName))
-	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", path.Base(meta.Name)))
 	_, _ = w.Write(data)
+}
+
+func (s *uiServer) handleMetadataError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 func respondJSON(w http.ResponseWriter, payload any) {

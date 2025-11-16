@@ -56,11 +56,12 @@ machine:
 * Metadata server: `localhost:9100`
 * Data server 1: `localhost:9101`
 * Data server 2: `localhost:9102`
-* UI proxy + static assets: `localhost:8090`
+* UI server + static assets: `localhost:8090`
 
-The `ui` container embeds the web assets and proxies `/api/*` requests to the
-metadata HTTP API running inside the `metadata` container, so the browser can
-talk to both layers from the same origin.
+The `ui` container embeds the web assets and handles `/api/*` requests itself by
+calling the metadata server (for plans and metadata) and the data servers (for
+uploads/downloads), so the browser can talk to the entire stack from the same
+origin.
 
 Follow these steps to push a file stored on your machine into the cluster using
 the provided CLI client, which automates the metadata and data server

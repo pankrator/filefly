@@ -49,8 +49,9 @@ type FileMetadata struct {
 
 // MetadataResponse is returned by the metadata server.
 type MetadataResponse struct {
-	Status   string        `json:"status"`
-	Error    string        `json:"error,omitempty"`
-	Metadata *FileMetadata `json:"metadata,omitempty"`
-	Data     string        `json:"data,omitempty"`
+	Status   string         `json:"status"`
+	Error    string         `json:"error,omitempty"`
+	Metadata *FileMetadata  `json:"metadata,omitempty"`
+	Data     string         `json:"data,omitempty"`
+	Files    []FileMetadata `json:"files,omitempty"`
 }

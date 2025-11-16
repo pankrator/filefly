@@ -15,7 +15,6 @@ func main() {
 	dataServers := flag.String("data-servers", ":8081", "comma separated list of data server addresses")
 	metadataFile := flag.String("metadata-file", "metadata.json", "path to persist metadata snapshots")
 	persistInterval := flag.Duration("persist-interval", 30*time.Second, "how often to persist metadata")
-	httpAddr := flag.String("http-addr", ":8090", "address for the metadata HTTP API consumed by the UI proxy (empty to disable)")
 	flag.Parse()
 
 	var servers []string
@@ -27,13 +26,6 @@ func main() {
 	}
 
 	srv := metadataserver.New(*addr, *blockSize, servers, *metadataFile, *persistInterval)
-	if *httpAddr != "" {
-		go func() {
-			if err := srv.ListenHTTP(*httpAddr); err != nil {
-				log.Fatalf("metadata HTTP server failed: %v", err)
-			}
-		}()
-	}
 
 	if err := srv.Listen(); err != nil {
 		log.Fatalf("metadata server failed: %v", err)

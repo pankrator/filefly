@@ -89,6 +89,8 @@ func requestPlan(addr, fileName string, size, replicas int) (*protocol.MetadataR
 
 func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 	offset := 0
+	conns := newConnCache()
+	defer conns.CloseAll()
 	for _, block := range blocks {
 		end := offset + block.Size
 		if end > len(data) {
@@ -103,7 +105,7 @@ func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 			return fmt.Errorf("block %s has no replicas to upload", block.ID)
 		}
 		for _, replica := range replicas {
-			if err := uploadReplica(block.ID, replica, chunk); err != nil {
+			if err := uploadReplica(block.ID, replica, chunk, conns); err != nil {
 				return err
 			}
 		}
@@ -115,27 +117,24 @@ func uploadBlocks(blocks []protocol.BlockRef, data []byte) error {
 	return nil
 }
 
-func uploadReplica(blockID string, replica protocol.BlockReplica, data []byte) error {
-	conn, err := net.Dial("tcp", replica.DataServer)
+func uploadReplica(blockID string, replica protocol.BlockReplica, data []byte, cache *connCache) error {
+	conn, err := cache.Get(replica.DataServer)
 	if err != nil {
 		return fmt.Errorf("connect to data server %s: %w", replica.DataServer, err)
 	}
-	defer conn.Close()
-
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(bufio.NewReader(conn))
-
 	req := protocol.DataServerRequest{
 		Command: "store",
 		BlockID: blockID,
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
-	if err := enc.Encode(req); err != nil {
+	if err := conn.enc.Encode(req); err != nil {
+		cache.Drop(replica.DataServer)
 		return fmt.Errorf("send store to %s: %w", replica.DataServer, err)
 	}
 
 	var resp protocol.DataServerResponse
-	if err := dec.Decode(&resp); err != nil {
+	if err := conn.dec.Decode(&resp); err != nil {
+		cache.Drop(replica.DataServer)
 		return fmt.Errorf("decode response from %s: %w", replica.DataServer, err)
 	}
 	if resp.Status != "ok" {
@@ -146,4 +145,48 @@ func uploadReplica(blockID string, replica protocol.BlockReplica, data []byte) e
 	}
 
 	return nil
+}
+
+type cachedConn struct {
+	enc  *json.Encoder
+	dec  *json.Decoder
+	conn net.Conn
+}
+
+type connCache struct {
+	conns map[string]*cachedConn
+}
+
+func newConnCache() *connCache {
+	return &connCache{conns: make(map[string]*cachedConn)}
+}
+
+func (c *connCache) Get(addr string) (*cachedConn, error) {
+	if conn, ok := c.conns[addr]; ok {
+		return conn, nil
+	}
+	netConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	cached := &cachedConn{
+		conn: netConn,
+		enc:  json.NewEncoder(netConn),
+		dec:  json.NewDecoder(bufio.NewReader(netConn)),
+	}
+	c.conns[addr] = cached
+	return cached, nil
+}
+
+func (c *connCache) Drop(addr string) {
+	if conn, ok := c.conns[addr]; ok {
+		_ = conn.conn.Close()
+		delete(c.conns, addr)
+	}
+}
+
+func (c *connCache) CloseAll() {
+	for addr := range c.conns {
+		c.Drop(addr)
+	}
 }

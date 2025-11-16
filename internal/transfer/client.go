@@ -74,13 +74,18 @@ func (c *Client) uploadBlock(blockID string, replicas []protocol.BlockReplica, d
 	var lastErr error
 	for _, replica := range replicas {
 		if err := c.uploadReplica(blockID, replica, data); err != nil {
-			lastErr = err
+			if lastErr == nil {
+				lastErr = err
+			}
 			log.Printf("transfer: failed to store block %s on %s: %v", blockID, replica.DataServer, err)
 			continue
 		}
 		successes++
 	}
-	if successes == 0 {
+	if successes != len(replicas) {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("replica count mismatch: stored %d/%d copies", successes, len(replicas))
+		}
 		return fmt.Errorf("upload block %s: %w", blockID, lastErr)
 	}
 	return nil

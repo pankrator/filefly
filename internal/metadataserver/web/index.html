@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FileFly UI</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>FileFly</h1>
+      <p class="subtitle">Metadata browser and uploader</p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Stored files</h2>
+          <button id="refresh-files" type="button">Refresh</button>
+        </div>
+        <ul id="file-list" class="file-list"></ul>
+        <p id="file-empty" class="empty-state hidden">No files stored yet.</p>
+      </section>
+
+      <section class="panel">
+        <h2>File details</h2>
+        <div id="file-details" class="file-details empty-state">
+          <p>Select a file to inspect its metadata.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Upload a file</h2>
+        <form id="upload-form">
+          <label>
+            Choose file
+            <input type="file" id="file-input" name="file" required />
+          </label>
+          <label>
+            Remote name (optional)
+            <input type="text" id="file-name" name="name" placeholder="Defaults to local file name" />
+          </label>
+          <button type="submit">Upload</button>
+          <p id="upload-status" class="status"></p>
+        </form>
+      </section>
+    </main>
+
+    <template id="file-template">
+      <li>
+        <button type="button" class="file-item"></button>
+      </li>
+    </template>
+
+    <template id="block-template">
+      <tr>
+        <td class="mono"></td>
+        <td></td>
+        <td class="mono"></td>
+      </tr>
+    </template>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

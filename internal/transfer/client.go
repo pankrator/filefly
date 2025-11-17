@@ -260,6 +260,36 @@ type cachedConn struct {
 	inUse bool
 }
 
+func (c *cachedConn) resetDeadlines() {
+	if c == nil || c.conn == nil {
+		return
+	}
+	var zero time.Time
+	_ = c.conn.SetDeadline(zero)
+	_ = c.conn.SetReadDeadline(zero)
+	_ = c.conn.SetWriteDeadline(zero)
+}
+
+func (c *cachedConn) ping() error {
+	if c == nil {
+		return fmt.Errorf("cached connection is nil")
+	}
+	if err := c.enc.Encode(protocol.DataServerRequest{Command: "ping"}); err != nil {
+		return err
+	}
+	var resp protocol.DataServerResponse
+	if err := c.dec.Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Status != "ok" || !resp.Pong {
+		if resp.Error == "" {
+			resp.Error = "data server ping failed"
+		}
+		return fmt.Errorf(resp.Error)
+	}
+	return nil
+}
+
 type connCache struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
@@ -277,10 +307,17 @@ func newConnCache(maxPerAddr int) *connCache {
 }
 
 func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
+	var dialAttempted bool
 	for {
 		c.mu.Lock()
 		if conn, release := c.tryReserveLocked(addr); conn != nil {
 			c.mu.Unlock()
+			conn.resetDeadlines()
+			if err := conn.ping(); err != nil {
+				release(true)
+				continue
+			}
+			conn.resetDeadlines()
 			return conn, release, nil
 		}
 		canGrow := c.maxPerAddr <= 0 || len(c.conns[addr]) < c.maxPerAddr
@@ -306,6 +343,16 @@ func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
 		c.conns[addr] = append(c.conns[addr], cached)
 		release := c.makeReleaseLocked(addr, cached)
 		c.mu.Unlock()
+		cached.resetDeadlines()
+		if err := cached.ping(); err != nil {
+			release(true)
+			if dialAttempted {
+				return nil, nil, err
+			}
+			dialAttempted = true
+			continue
+		}
+		cached.resetDeadlines()
 		return cached, release, nil
 	}
 }

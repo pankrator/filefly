@@ -54,6 +54,22 @@ Visit `http://localhost:8090` to interact with the UI. Browser requests to
 `/api/*` are handled by the UI server, which fetches metadata from the metadata
 server and streams payloads to and from the data servers.
 
+## Backfilling CRC checksums
+
+Data servers now store a CRC32 checksum next to every block file and validate it
+when serving downloads. Deployments that already contained data prior to this
+change should backfill checksum sidecar files before enabling the strict
+validation logic. Run the migration helper once per storage directory to produce
+missing checksum files:
+
+```bash
+go run ./cmd/checksum-migrator --storage_dir /tmp/filefly-blocks
+```
+
+Pass `--force` to overwrite existing checksum files if you suspect they became
+corrupted. The migration is safe to run multiple times because it only writes
+missing files by default.
+
 ## Planning uploads for a file
 
 All commands use JSON documents delimited by newlines. The `store_file` command

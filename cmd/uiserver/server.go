@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"path"
@@ -98,18 +100,18 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		http.Error(w, "failed to read file", http.StatusInternalServerError)
-		return
-	}
-
 	name := strings.TrimSpace(r.FormValue("name"))
 	if name == "" && header != nil {
 		name = header.Filename
 	}
 	if name == "" {
 		http.Error(w, "missing file name", http.StatusBadRequest)
+		return
+	}
+
+	totalSize, err := uploadFileSize(file, header)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("determine file size: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -123,14 +125,19 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		replicas = value
 	}
 
-	log.Printf("ui: upload request for %s (%d bytes, replicas=%d)", name, len(data), replicas)
-	meta, err := s.metadata.planFile(name, len(data), replicas)
+	log.Printf("ui: upload request for %s (%d bytes, replicas=%d)", name, totalSize, replicas)
+	meta, err := s.metadata.planFile(name, totalSize, replicas)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("plan file: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	if err := s.transfer.UploadBlocks(meta.Blocks, data); err != nil {
+	if err := rewindMultipartFile(file); err != nil {
+		http.Error(w, fmt.Sprintf("rewind upload data: %v", err), http.StatusInternalServerError)
+		return
+	}
+	reader := io.LimitReader(file, int64(meta.TotalSize))
+	if err := s.transfer.UploadBlocksFrom(meta.Blocks, reader); err != nil {
 		http.Error(w, fmt.Sprintf("upload blocks: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -218,6 +225,36 @@ func (s *uiServer) handleMetadataError(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func uploadFileSize(file multipart.File, header *multipart.FileHeader) (int, error) {
+	if header != nil && header.Size >= 0 {
+		if header.Size > int64(math.MaxInt) {
+			return 0, fmt.Errorf("file too large: %d bytes exceeds supported size", header.Size)
+		}
+		if err := rewindMultipartFile(file); err != nil {
+			return 0, err
+		}
+		return int(header.Size), nil
+	}
+	size, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	if size > int64(math.MaxInt) {
+		return 0, fmt.Errorf("file too large: %d bytes exceeds supported size", size)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+	return int(size), nil
+}
+
+func rewindMultipartFile(file multipart.File) error {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	return nil
 }
 
 func respondJSON(w http.ResponseWriter, payload any) {

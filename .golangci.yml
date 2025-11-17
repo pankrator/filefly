@@ -1,0 +1,26 @@
+version: 2
+run:
+  timeout: 5m
+  go: "1.21"
+  tests: true
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - revive
+    - ineffassign
+formatters:
+  enable:
+    - gofmt
+    - goimports
+formatters-settings:
+  gofmt:
+    simplify: true
+linters-settings:
+  revive:
+    ignore-generated-header: true
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -68,7 +68,7 @@ func WithMaxDataServerConnections(n int) ClientOption {
 func NewClient(opts ...ClientOption) *Client {
 	cfg := clientConfig{
 		dialTimeout:        replicaFetchTimeout,
-		maxDataServerConns: 1,
+		maxDataServerConns: 0,
 	}
 	for _, opt := range opts {
 		if opt != nil {

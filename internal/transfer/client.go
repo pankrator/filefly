@@ -330,8 +330,7 @@ func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
 		c.mu.Lock()
 		if conn, release := c.tryReserveLocked(addr); conn != nil {
 			c.mu.Unlock()
-			conn.resetDeadlines()
-			if err := conn.ping(); err != nil {
+			if err := c.verifyCachedConn(conn); err != nil {
 				release(true)
 				continue
 			}
@@ -365,8 +364,7 @@ func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
 		c.conns[addr] = append(c.conns[addr], cached)
 		release := c.makeReleaseLocked(addr, cached)
 		c.mu.Unlock()
-		cached.resetDeadlines()
-		if err := cached.ping(); err != nil {
+		if err := c.verifyCachedConn(cached); err != nil {
 			release(true)
 			if dialAttempted {
 				return nil, nil, err
@@ -377,6 +375,25 @@ func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
 		cached.resetDeadlines()
 		return cached, release, nil
 	}
+}
+
+func (c *connCache) verifyCachedConn(conn *cachedConn) error {
+	if conn == nil {
+		return fmt.Errorf("cached connection is nil")
+	}
+	conn.resetDeadlines()
+	var deadlineSet bool
+	if c != nil && c.dialTimeout > 0 && conn.conn != nil {
+		if err := conn.conn.SetDeadline(time.Now().Add(c.dialTimeout)); err != nil {
+			return err
+		}
+		deadlineSet = true
+	}
+	err := conn.ping()
+	if deadlineSet {
+		conn.resetDeadlines()
+	}
+	return err
 }
 
 func (c *connCache) tryReserveLocked(addr string) (*cachedConn, func(drop bool)) {

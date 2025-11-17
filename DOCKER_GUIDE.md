@@ -89,3 +89,19 @@ If you prefer to perform the upload manually, you can still talk directly to the
 TCP ports exposed by Docker Compose by using tools such as `nc` against
 `localhost:9100` (metadata) followed by `localhost:9101` or `localhost:9102`
 (data servers).
+
+## Generating checksums for existing block data
+
+Deployments that already contained block files before the CRC support was added
+need to create checksum sidecar files so the data servers can validate reads.
+The Compose stack ships with a helper service that mounts both block volumes and
+runs the migrator against each directory:
+
+```bash
+docker compose run --rm checksum_migrator
+```
+
+The command is safe to re-run. It only writes checksum files that do not already
+exist and reports a summary once both volumes have been processed. Pass
+`--force` arguments in the `command` section of the service if you need to
+regenerate every checksum from scratch.

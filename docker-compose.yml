@@ -7,7 +7,7 @@ services:
     command: go run ./cmd/dataserver --addr :9101 --storage_dir /blocks
     volumes:
       - .:/app
-      - blocks1:/blocks
+      - blocks1:/blocks # stores blocks and CRC checksum files
     ports:
       - "9101:9101"
 
@@ -17,7 +17,7 @@ services:
     command: go run ./cmd/dataserver --addr :9102 --storage_dir /blocks
     volumes:
       - .:/app
-      - blocks2:/blocks
+      - blocks2:/blocks # stores blocks and CRC checksum files
     ports:
       - "9102:9102"
 
@@ -55,6 +55,21 @@ services:
       - "8090:8090"
     depends_on:
       - metadata
+
+  checksum_migrator:
+    image: golang:1.21
+    working_dir: /app
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      go run ./cmd/checksum-migrator --storage_dir /blocks1 &&
+      go run ./cmd/checksum-migrator --storage_dir /blocks2
+    volumes:
+      - .:/app
+      - blocks1:/blocks1
+      - blocks2:/blocks2
+    depends_on:
+      - dataserver1
+      - dataserver2
 
 volumes:
   blocks1:

@@ -38,6 +38,20 @@ func (c *metadataClient) listDataServers() ([]protocol.DataServerHealth, error) 
 	return resp.Servers, nil
 }
 
+func (c *metadataClient) verifyDataServer(addr string) (*protocol.DataServerHealth, error) {
+	resp, err := c.request(protocol.MetadataRequest{Command: "verify_data_server", DataServerAddr: addr})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Servers) == 0 {
+		return nil, fmt.Errorf("metadata server returned no verification info for %s", addr)
+	}
+
+	server := resp.Servers[0]
+	return &server, nil
+}
+
 func (c *metadataClient) planFile(name string, size, replicas int) (*protocol.FileMetadata, error) {
 	req := protocol.MetadataRequest{
 		Command:  "store_file",

@@ -12,10 +12,12 @@ type DataServerRequest struct {
 
 // DataServerResponse is returned by the data server.
 type DataServerResponse struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-	Data   string `json:"data,omitempty"`
-	Pong   bool   `json:"pong,omitempty"`
+	Status              string                    `json:"status"`
+	Error               string                    `json:"error,omitempty"`
+	Data                string                    `json:"data,omitempty"`
+	Pong                bool                      `json:"pong,omitempty"`
+	VerificationSummary *BlockVerificationSummary `json:"verification_summary,omitempty"`
+	Verifications       []BlockVerification       `json:"verifications,omitempty"`
 }
 
 // MetadataRequest is consumed by the metadata server.
@@ -64,9 +66,28 @@ type MetadataResponse struct {
 
 // DataServerHealth describes the last known health of a data server.
 type DataServerHealth struct {
-	Address     string    `json:"address"`
+	Address           string                    `json:"address"`
+	Healthy           bool                      `json:"healthy"`
+	LastPong          time.Time                 `json:"last_pong,omitempty"`
+	LastChecked       time.Time                 `json:"last_checked,omitempty"`
+	Error             string                    `json:"error,omitempty"`
+	Verification      *BlockVerificationSummary `json:"verification,omitempty"`
+	VerificationError string                    `json:"verification_error,omitempty"`
+}
+
+// BlockVerification describes the latest integrity check for a block.
+type BlockVerification struct {
+	BlockID     string    `json:"block_id"`
 	Healthy     bool      `json:"healthy"`
-	LastPong    time.Time `json:"last_pong,omitempty"`
-	LastChecked time.Time `json:"last_checked,omitempty"`
 	Error       string    `json:"error,omitempty"`
+	LastChecked time.Time `json:"last_checked,omitempty"`
+}
+
+// BlockVerificationSummary aggregates the verifier state for a data server.
+type BlockVerificationSummary struct {
+	TotalBlocks     int                 `json:"total_blocks"`
+	HealthyBlocks   int                 `json:"healthy_blocks"`
+	UnhealthyBlocks int                 `json:"unhealthy_blocks"`
+	LastScan        time.Time           `json:"last_scan,omitempty"`
+	CorruptedBlocks []BlockVerification `json:"corrupted_blocks,omitempty"`
 }

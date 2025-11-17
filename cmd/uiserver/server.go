@@ -48,6 +48,7 @@ func (s *uiServer) routes() http.Handler {
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/files/", s.handleFileDetail)
 	mux.HandleFunc("/api/data-servers", s.handleDataServers)
+	mux.HandleFunc("/api/data-servers/verify", s.handleVerifyDataServer)
 	mux.Handle("/", http.FileServer(s.static))
 
 	return mux
@@ -77,6 +78,38 @@ func (s *uiServer) handleDataServers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, map[string]any{"servers": servers})
+}
+
+func (s *uiServer) handleVerifyDataServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	defer r.Body.Close() //nolint:errcheck
+
+	var payload struct {
+		Address string `json:"address"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	addr := strings.TrimSpace(payload.Address)
+	if addr == "" {
+		http.Error(w, "missing address", http.StatusBadRequest)
+		return
+	}
+
+	server, err := s.metadata.verifyDataServer(addr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("verify %s: %v", addr, err), http.StatusBadGateway)
+		return
+	}
+
+	respondJSON(w, map[string]any{"server": server})
 }
 
 func (s *uiServer) handleListFiles(w http.ResponseWriter, _ *http.Request) {

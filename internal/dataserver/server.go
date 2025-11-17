@@ -3,8 +3,11 @@ package dataserver
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log"
 	"net"
@@ -104,10 +107,16 @@ func (s *Server) store(req protocol.DataServerRequest) protocol.DataServerRespon
 	}
 
 	path := s.blockPath(req.BlockID)
+	checksumPath := s.checksumPath(req.BlockID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("write block: %v", err)}
+	}
+	sum := crc32.ChecksumIEEE(data)
+	if err := writeChecksum(checksumPath, sum); err != nil {
+		_ = os.Remove(path)
+		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("write checksum: %v", err)}
 	}
 	log.Printf("dataserver: stored block %s (%d bytes)", req.BlockID, len(data))
 	return protocol.DataServerResponse{Status: "ok"}
@@ -119,14 +128,26 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 	}
 
 	path := s.blockPath(req.BlockID)
+	checksumPath := s.checksumPath(req.BlockID)
 	s.mu.RLock()
 	data, err := os.ReadFile(path)
-	s.mu.RUnlock()
 	if err != nil {
+		s.mu.RUnlock()
 		if os.IsNotExist(err) {
 			return protocol.DataServerResponse{Status: "error", Error: "block not found"}
 		}
 		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("read block: %v", err)}
+	}
+	storedChecksum, err := readChecksum(checksumPath)
+	s.mu.RUnlock()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return protocol.DataServerResponse{Status: "error", Error: "checksum file missing"}
+		}
+		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("read checksum: %v", err)}
+	}
+	if crc32.ChecksumIEEE(data) != storedChecksum {
+		return protocol.DataServerResponse{Status: "error", Error: "checksum mismatch"}
 	}
 	log.Printf("dataserver: retrieved block %s (%d bytes)", req.BlockID, len(data))
 	return protocol.DataServerResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(data)}
@@ -138,13 +159,18 @@ func (s *Server) delete(req protocol.DataServerRequest) protocol.DataServerRespo
 	}
 
 	path := s.blockPath(req.BlockID)
+	checksumPath := s.checksumPath(req.BlockID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return protocol.DataServerResponse{Status: "ok"}
+		if !os.IsNotExist(err) {
+			return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("delete block: %v", err)}
 		}
-		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("delete block: %v", err)}
+	}
+	if err := os.Remove(checksumPath); err != nil {
+		if !os.IsNotExist(err) {
+			return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("delete checksum: %v", err)}
+		}
 	}
 	log.Printf("dataserver: deleted block %s", req.BlockID)
 	return protocol.DataServerResponse{Status: "ok"}
@@ -153,4 +179,25 @@ func (s *Server) delete(req protocol.DataServerRequest) protocol.DataServerRespo
 func (s *Server) blockPath(blockID string) string {
 	safe := base64.RawURLEncoding.EncodeToString([]byte(blockID))
 	return filepath.Join(s.storageDir, safe)
+}
+
+func (s *Server) checksumPath(blockID string) string {
+	return s.blockPath(blockID) + ".crc"
+}
+
+func writeChecksum(path string, checksum uint32) error {
+	buf := make([]byte, 4)
+	binary.BigEndian.PutUint32(buf, checksum)
+	return os.WriteFile(path, buf, 0o600)
+}
+
+func readChecksum(path string) (uint32, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	if len(data) != 4 {
+		return 0, fmt.Errorf("invalid checksum length: %d", len(data))
+	}
+	return binary.BigEndian.Uint32(data), nil
 }

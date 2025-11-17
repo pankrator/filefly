@@ -7,7 +7,7 @@ services:
     command: go run ./cmd/dataserver --addr :9101 --storage_dir /blocks
     volumes:
       - .:/app
-      - blocks1:/blocks
+      - blocks1:/blocks # stores blocks and CRC checksum files
     ports:
       - "9101:9101"
 
@@ -17,7 +17,7 @@ services:
     command: go run ./cmd/dataserver --addr :9102 --storage_dir /blocks
     volumes:
       - .:/app
-      - blocks2:/blocks
+      - blocks2:/blocks # stores blocks and CRC checksum files
     ports:
       - "9102:9102"
 

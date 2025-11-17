@@ -25,11 +25,59 @@ type Client struct {
 	dialTimeout time.Duration
 }
 
+func (c *Client) applyReadDeadline(conn *cachedConn) {
+	if c == nil || conn == nil || conn.conn == nil || c.dialTimeout <= 0 {
+		return
+	}
+	_ = conn.conn.SetReadDeadline(time.Now().Add(c.dialTimeout))
+}
+
+func (c *Client) applyWriteDeadline(conn *cachedConn) {
+	if c == nil || conn == nil || conn.conn == nil || c.dialTimeout <= 0 {
+		return
+	}
+	_ = conn.conn.SetWriteDeadline(time.Now().Add(c.dialTimeout))
+}
+
+type clientConfig struct {
+	dialTimeout        time.Duration
+	maxDataServerConns int
+}
+
+// ClientOption configures a transfer client during creation.
+type ClientOption func(*clientConfig)
+
+// WithDialTimeout overrides the default timeout used when communicating with
+// data servers.
+func WithDialTimeout(d time.Duration) ClientOption {
+	return func(cfg *clientConfig) {
+		cfg.dialTimeout = d
+	}
+}
+
+// WithMaxDataServerConnections configures how many pooled connections can be
+// opened to a single data server. Values less than or equal to zero will allow
+// unlimited connections.
+func WithMaxDataServerConnections(n int) ClientOption {
+	return func(cfg *clientConfig) {
+		cfg.maxDataServerConns = n
+	}
+}
+
 // NewClient creates a transfer client with a pre-warmed connection pool.
-func NewClient() *Client {
+func NewClient(opts ...ClientOption) *Client {
+	cfg := clientConfig{
+		dialTimeout:        replicaFetchTimeout,
+		maxDataServerConns: 0,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
 	return &Client{
-		pool:        newConnCache(),
-		dialTimeout: replicaFetchTimeout,
+		pool:        newConnCache(cfg.maxDataServerConns, cfg.dialTimeout),
+		dialTimeout: cfg.dialTimeout,
 	}
 }
 
@@ -98,16 +146,19 @@ func (c *Client) uploadReplica(blockID string, replica protocol.BlockReplica, da
 	}
 	drop := false
 	defer func() { release(drop) }()
+	conn.resetDeadlines()
 	req := protocol.DataServerRequest{
 		Command: "store",
 		BlockID: blockID,
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
+	c.applyWriteDeadline(conn)
 	if err := conn.enc.Encode(req); err != nil {
 		drop = true
 		return fmt.Errorf("send store to %s: %w", replica.DataServer, err)
 	}
 	var resp protocol.DataServerResponse
+	c.applyReadDeadline(conn)
 	if err := conn.dec.Decode(&resp); err != nil {
 		drop = true
 		return fmt.Errorf("decode response from %s: %w", replica.DataServer, err)
@@ -176,25 +227,25 @@ func (c *Client) fetchBlockWithFailover(block protocol.BlockRef) ([]byte, error)
 }
 
 func (c *Client) pullBlock(addr, blockID string) ([]byte, error) {
-	dialer := &net.Dialer{Timeout: c.dialTimeout}
-	conn, err := dialer.Dial("tcp", addr)
+	conn, release, err := c.pool.Acquire(addr)
 	if err != nil {
 		return nil, fmt.Errorf("connect to data server %s: %w", addr, err)
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(c.dialTimeout))
-
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(bufio.NewReader(conn))
+	drop := false
+	defer func() { release(drop) }()
 	req := protocol.DataServerRequest{
 		Command: "retrieve",
 		BlockID: blockID,
 	}
-	if err := enc.Encode(req); err != nil {
+	c.applyWriteDeadline(conn)
+	if err := conn.enc.Encode(req); err != nil {
+		drop = true
 		return nil, fmt.Errorf("send retrieve to %s: %w", addr, err)
 	}
 	var resp protocol.DataServerResponse
-	if err := dec.Decode(&resp); err != nil {
+	c.applyReadDeadline(conn)
+	if err := conn.dec.Decode(&resp); err != nil {
+		drop = true
 		return nil, fmt.Errorf("decode response from %s: %w", addr, err)
 	}
 	if resp.Status != "ok" {
@@ -221,77 +272,203 @@ type cachedConn struct {
 	enc   *json.Encoder
 	dec   *json.Decoder
 	conn  net.Conn
-	mu    sync.Mutex
 	alive bool
+	inUse bool
+}
+
+func (c *cachedConn) resetDeadlines() {
+	if c == nil || c.conn == nil {
+		return
+	}
+	var zero time.Time
+	_ = c.conn.SetDeadline(zero)
+	_ = c.conn.SetReadDeadline(zero)
+	_ = c.conn.SetWriteDeadline(zero)
+}
+
+func (c *cachedConn) ping() error {
+	if c == nil {
+		return fmt.Errorf("cached connection is nil")
+	}
+	if err := c.enc.Encode(protocol.DataServerRequest{Command: "ping"}); err != nil {
+		return err
+	}
+	var resp protocol.DataServerResponse
+	if err := c.dec.Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Status != "ok" || !resp.Pong {
+		if resp.Error == "" {
+			resp.Error = "data server ping failed"
+		}
+		return fmt.Errorf(resp.Error)
+	}
+	return nil
 }
 
 type connCache struct {
-	mu    sync.Mutex
-	conns map[string]*cachedConn
+	mu          sync.Mutex
+	cond        *sync.Cond
+	conns       map[string][]*cachedConn
+	maxPerAddr  int
+	dialTimeout time.Duration
 }
 
-func newConnCache() *connCache {
-	return &connCache{conns: make(map[string]*cachedConn)}
+func newConnCache(maxPerAddr int, dialTimeout time.Duration) *connCache {
+	c := &connCache{
+		conns:       make(map[string][]*cachedConn),
+		maxPerAddr:  maxPerAddr,
+		dialTimeout: dialTimeout,
+	}
+	c.cond = sync.NewCond(&c.mu)
+	return c
 }
 
 func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
+	var dialAttempted bool
 	for {
 		c.mu.Lock()
-		conn, ok := c.conns[addr]
-		if !ok {
-			netConn, err := net.Dial("tcp", addr)
-			if err != nil {
-				c.mu.Unlock()
-				return nil, nil, err
+		if conn, release := c.tryReserveLocked(addr); conn != nil {
+			c.mu.Unlock()
+			if err := c.verifyCachedConn(conn); err != nil {
+				release(true)
+				continue
 			}
-			conn = &cachedConn{
-				conn:  netConn,
-				enc:   json.NewEncoder(netConn),
-				dec:   json.NewDecoder(bufio.NewReader(netConn)),
-				alive: true,
-			}
-			c.conns[addr] = conn
+			conn.resetDeadlines()
+			return conn, release, nil
+		}
+		canGrow := c.maxPerAddr <= 0 || len(c.conns[addr]) < c.maxPerAddr
+		if !canGrow {
+			c.cond.Wait()
+			c.mu.Unlock()
+			continue
 		}
 		c.mu.Unlock()
 
-		conn.mu.Lock()
-		if !conn.alive {
-			conn.mu.Unlock()
+		dialer := &net.Dialer{}
+		if c.dialTimeout > 0 {
+			dialer.Timeout = c.dialTimeout
+		}
+		netConn, err := dialer.Dial("tcp", addr)
+		if err != nil {
+			return nil, nil, err
+		}
+		cached := &cachedConn{
+			conn:  netConn,
+			enc:   json.NewEncoder(netConn),
+			dec:   json.NewDecoder(bufio.NewReader(netConn)),
+			alive: true,
+		}
+		c.mu.Lock()
+		cached.inUse = true
+		c.conns[addr] = append(c.conns[addr], cached)
+		release := c.makeReleaseLocked(addr, cached)
+		c.mu.Unlock()
+		if err := c.verifyCachedConn(cached); err != nil {
+			release(true)
+			if dialAttempted {
+				return nil, nil, err
+			}
+			dialAttempted = true
 			continue
 		}
+		cached.resetDeadlines()
+		return cached, release, nil
+	}
+}
 
-		release := func(drop bool) {
-			if drop && conn.alive {
+func (c *connCache) verifyCachedConn(conn *cachedConn) error {
+	if conn == nil {
+		return fmt.Errorf("cached connection is nil")
+	}
+	conn.resetDeadlines()
+	var deadlineSet bool
+	if c != nil && c.dialTimeout > 0 && conn.conn != nil {
+		if err := conn.conn.SetDeadline(time.Now().Add(c.dialTimeout)); err != nil {
+			return err
+		}
+		deadlineSet = true
+	}
+	err := conn.ping()
+	if deadlineSet {
+		conn.resetDeadlines()
+	}
+	return err
+}
+
+func (c *connCache) tryReserveLocked(addr string) (*cachedConn, func(drop bool)) {
+	pool := c.conns[addr]
+	for i := 0; i < len(pool); i++ {
+		conn := pool[i]
+		if conn == nil {
+			continue
+		}
+		if !conn.alive {
+			c.removeConnLocked(addr, conn)
+			i--
+			continue
+		}
+		if conn.inUse {
+			continue
+		}
+		conn.inUse = true
+		return conn, c.makeReleaseLocked(addr, conn)
+	}
+	return nil, nil
+}
+
+func (c *connCache) makeReleaseLocked(addr string, conn *cachedConn) func(drop bool) {
+	return func(drop bool) {
+		c.mu.Lock()
+		defer func() {
+			c.cond.Broadcast()
+			c.mu.Unlock()
+		}()
+		if drop || !conn.alive {
+			if conn.alive {
 				conn.alive = false
 				_ = conn.conn.Close()
-				c.mu.Lock()
-				if c.conns[addr] == conn {
-					delete(c.conns, addr)
-				}
-				c.mu.Unlock()
 			}
-			conn.mu.Unlock()
+			c.removeConnLocked(addr, conn)
+			return
 		}
+		conn.inUse = false
+	}
+}
 
-		return conn, release, nil
+func (c *connCache) removeConnLocked(addr string, target *cachedConn) {
+	pool := c.conns[addr]
+	for i, conn := range pool {
+		if conn == target {
+			pool = append(pool[:i], pool[i+1:]...)
+			if len(pool) == 0 {
+				delete(c.conns, addr)
+			} else {
+				c.conns[addr] = pool
+			}
+			return
+		}
 	}
 }
 
 func (c *connCache) CloseAll() {
 	c.mu.Lock()
-	conns := make([]*cachedConn, 0, len(c.conns))
-	for addr, conn := range c.conns {
-		delete(c.conns, addr)
+	conns := make([]*cachedConn, 0)
+	for addr, pool := range c.conns {
 		_ = addr
-		conns = append(conns, conn)
+		for _, conn := range pool {
+			conns = append(conns, conn)
+		}
+		delete(c.conns, addr)
 	}
 	c.mu.Unlock()
 	for _, conn := range conns {
-		conn.mu.Lock()
+		if conn == nil {
+			continue
+		}
 		if conn.alive {
 			conn.alive = false
 			_ = conn.conn.Close()
 		}
-		conn.mu.Unlock()
 	}
 }

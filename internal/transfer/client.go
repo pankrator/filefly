@@ -25,6 +25,20 @@ type Client struct {
 	dialTimeout time.Duration
 }
 
+func (c *Client) applyReadDeadline(conn *cachedConn) {
+	if c == nil || conn == nil || conn.conn == nil || c.dialTimeout <= 0 {
+		return
+	}
+	_ = conn.conn.SetReadDeadline(time.Now().Add(c.dialTimeout))
+}
+
+func (c *Client) applyWriteDeadline(conn *cachedConn) {
+	if c == nil || conn == nil || conn.conn == nil || c.dialTimeout <= 0 {
+		return
+	}
+	_ = conn.conn.SetWriteDeadline(time.Now().Add(c.dialTimeout))
+}
+
 type clientConfig struct {
 	dialTimeout        time.Duration
 	maxDataServerConns int
@@ -137,11 +151,13 @@ func (c *Client) uploadReplica(blockID string, replica protocol.BlockReplica, da
 		BlockID: blockID,
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
+	c.applyWriteDeadline(conn)
 	if err := conn.enc.Encode(req); err != nil {
 		drop = true
 		return fmt.Errorf("send store to %s: %w", replica.DataServer, err)
 	}
 	var resp protocol.DataServerResponse
+	c.applyReadDeadline(conn)
 	if err := conn.dec.Decode(&resp); err != nil {
 		drop = true
 		return fmt.Errorf("decode response from %s: %w", replica.DataServer, err)
@@ -216,18 +232,17 @@ func (c *Client) pullBlock(addr, blockID string) ([]byte, error) {
 	}
 	drop := false
 	defer func() { release(drop) }()
-	if c.dialTimeout > 0 {
-		_ = conn.conn.SetDeadline(time.Now().Add(c.dialTimeout))
-	}
 	req := protocol.DataServerRequest{
 		Command: "retrieve",
 		BlockID: blockID,
 	}
+	c.applyWriteDeadline(conn)
 	if err := conn.enc.Encode(req); err != nil {
 		drop = true
 		return nil, fmt.Errorf("send retrieve to %s: %w", addr, err)
 	}
 	var resp protocol.DataServerResponse
+	c.applyReadDeadline(conn)
 	if err := conn.dec.Decode(&resp); err != nil {
 		drop = true
 		return nil, fmt.Errorf("decode response from %s: %w", addr, err)

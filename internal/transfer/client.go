@@ -25,11 +25,45 @@ type Client struct {
 	dialTimeout time.Duration
 }
 
+type clientConfig struct {
+	dialTimeout        time.Duration
+	maxDataServerConns int
+}
+
+// ClientOption configures a transfer client during creation.
+type ClientOption func(*clientConfig)
+
+// WithDialTimeout overrides the default timeout used when communicating with
+// data servers.
+func WithDialTimeout(d time.Duration) ClientOption {
+	return func(cfg *clientConfig) {
+		cfg.dialTimeout = d
+	}
+}
+
+// WithMaxDataServerConnections configures how many pooled connections can be
+// opened to a single data server. Values less than or equal to zero will allow
+// unlimited connections.
+func WithMaxDataServerConnections(n int) ClientOption {
+	return func(cfg *clientConfig) {
+		cfg.maxDataServerConns = n
+	}
+}
+
 // NewClient creates a transfer client with a pre-warmed connection pool.
-func NewClient() *Client {
+func NewClient(opts ...ClientOption) *Client {
+	cfg := clientConfig{
+		dialTimeout:        replicaFetchTimeout,
+		maxDataServerConns: 1,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
 	return &Client{
-		pool:        newConnCache(),
-		dialTimeout: replicaFetchTimeout,
+		pool:        newConnCache(cfg.maxDataServerConns),
+		dialTimeout: cfg.dialTimeout,
 	}
 }
 
@@ -176,25 +210,26 @@ func (c *Client) fetchBlockWithFailover(block protocol.BlockRef) ([]byte, error)
 }
 
 func (c *Client) pullBlock(addr, blockID string) ([]byte, error) {
-	dialer := &net.Dialer{Timeout: c.dialTimeout}
-	conn, err := dialer.Dial("tcp", addr)
+	conn, release, err := c.pool.Acquire(addr)
 	if err != nil {
 		return nil, fmt.Errorf("connect to data server %s: %w", addr, err)
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(c.dialTimeout))
-
-	enc := json.NewEncoder(conn)
-	dec := json.NewDecoder(bufio.NewReader(conn))
+	drop := false
+	defer func() { release(drop) }()
+	if c.dialTimeout > 0 {
+		_ = conn.conn.SetDeadline(time.Now().Add(c.dialTimeout))
+	}
 	req := protocol.DataServerRequest{
 		Command: "retrieve",
 		BlockID: blockID,
 	}
-	if err := enc.Encode(req); err != nil {
+	if err := conn.enc.Encode(req); err != nil {
+		drop = true
 		return nil, fmt.Errorf("send retrieve to %s: %w", addr, err)
 	}
 	var resp protocol.DataServerResponse
-	if err := dec.Decode(&resp); err != nil {
+	if err := conn.dec.Decode(&resp); err != nil {
+		drop = true
 		return nil, fmt.Errorf("decode response from %s: %w", addr, err)
 	}
 	if resp.Status != "ok" {
@@ -221,77 +256,133 @@ type cachedConn struct {
 	enc   *json.Encoder
 	dec   *json.Decoder
 	conn  net.Conn
-	mu    sync.Mutex
 	alive bool
+	inUse bool
 }
 
 type connCache struct {
-	mu    sync.Mutex
-	conns map[string]*cachedConn
+	mu         sync.Mutex
+	cond       *sync.Cond
+	conns      map[string][]*cachedConn
+	maxPerAddr int
 }
 
-func newConnCache() *connCache {
-	return &connCache{conns: make(map[string]*cachedConn)}
+func newConnCache(maxPerAddr int) *connCache {
+	c := &connCache{
+		conns:      make(map[string][]*cachedConn),
+		maxPerAddr: maxPerAddr,
+	}
+	c.cond = sync.NewCond(&c.mu)
+	return c
 }
 
 func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
 	for {
 		c.mu.Lock()
-		conn, ok := c.conns[addr]
-		if !ok {
-			netConn, err := net.Dial("tcp", addr)
-			if err != nil {
-				c.mu.Unlock()
-				return nil, nil, err
-			}
-			conn = &cachedConn{
-				conn:  netConn,
-				enc:   json.NewEncoder(netConn),
-				dec:   json.NewDecoder(bufio.NewReader(netConn)),
-				alive: true,
-			}
-			c.conns[addr] = conn
+		if conn, release := c.tryReserveLocked(addr); conn != nil {
+			c.mu.Unlock()
+			return conn, release, nil
+		}
+		canGrow := c.maxPerAddr <= 0 || len(c.conns[addr]) < c.maxPerAddr
+		if !canGrow {
+			c.cond.Wait()
+			c.mu.Unlock()
+			continue
 		}
 		c.mu.Unlock()
 
-		conn.mu.Lock()
-		if !conn.alive {
-			conn.mu.Unlock()
+		netConn, err := net.Dial("tcp", addr)
+		if err != nil {
+			return nil, nil, err
+		}
+		cached := &cachedConn{
+			conn:  netConn,
+			enc:   json.NewEncoder(netConn),
+			dec:   json.NewDecoder(bufio.NewReader(netConn)),
+			alive: true,
+		}
+		c.mu.Lock()
+		cached.inUse = true
+		c.conns[addr] = append(c.conns[addr], cached)
+		release := c.makeReleaseLocked(addr, cached)
+		c.mu.Unlock()
+		return cached, release, nil
+	}
+}
+
+func (c *connCache) tryReserveLocked(addr string) (*cachedConn, func(drop bool)) {
+	pool := c.conns[addr]
+	for i := 0; i < len(pool); i++ {
+		conn := pool[i]
+		if conn == nil {
 			continue
 		}
+		if !conn.alive {
+			c.removeConnLocked(addr, conn)
+			i--
+			continue
+		}
+		if conn.inUse {
+			continue
+		}
+		conn.inUse = true
+		return conn, c.makeReleaseLocked(addr, conn)
+	}
+	return nil, nil
+}
 
-		release := func(drop bool) {
-			if drop && conn.alive {
+func (c *connCache) makeReleaseLocked(addr string, conn *cachedConn) func(drop bool) {
+	return func(drop bool) {
+		c.mu.Lock()
+		defer func() {
+			c.cond.Broadcast()
+			c.mu.Unlock()
+		}()
+		if drop || !conn.alive {
+			if conn.alive {
 				conn.alive = false
 				_ = conn.conn.Close()
-				c.mu.Lock()
-				if c.conns[addr] == conn {
-					delete(c.conns, addr)
-				}
-				c.mu.Unlock()
 			}
-			conn.mu.Unlock()
+			c.removeConnLocked(addr, conn)
+			return
 		}
+		conn.inUse = false
+	}
+}
 
-		return conn, release, nil
+func (c *connCache) removeConnLocked(addr string, target *cachedConn) {
+	pool := c.conns[addr]
+	for i, conn := range pool {
+		if conn == target {
+			pool = append(pool[:i], pool[i+1:]...)
+			if len(pool) == 0 {
+				delete(c.conns, addr)
+			} else {
+				c.conns[addr] = pool
+			}
+			return
+		}
 	}
 }
 
 func (c *connCache) CloseAll() {
 	c.mu.Lock()
-	conns := make([]*cachedConn, 0, len(c.conns))
-	for addr, conn := range c.conns {
-		delete(c.conns, addr)
+	conns := make([]*cachedConn, 0)
+	for addr, pool := range c.conns {
 		_ = addr
-		conns = append(conns, conn)
+		for _, conn := range pool {
+			conns = append(conns, conn)
+		}
+		delete(c.conns, addr)
 	}
 	c.mu.Unlock()
 	for _, conn := range conns {
-		conn.mu.Lock()
+		if conn == nil {
+			continue
+		}
 		if conn.alive {
 			conn.alive = false
 			_ = conn.conn.Close()
 		}
-		conn.mu.Unlock()
 	}
 }

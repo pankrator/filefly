@@ -76,7 +76,7 @@ func NewClient(opts ...ClientOption) *Client {
 		}
 	}
 	return &Client{
-		pool:        newConnCache(cfg.maxDataServerConns),
+		pool:        newConnCache(cfg.maxDataServerConns, cfg.dialTimeout),
 		dialTimeout: cfg.dialTimeout,
 	}
 }
@@ -146,6 +146,7 @@ func (c *Client) uploadReplica(blockID string, replica protocol.BlockReplica, da
 	}
 	drop := false
 	defer func() { release(drop) }()
+	conn.resetDeadlines()
 	req := protocol.DataServerRequest{
 		Command: "store",
 		BlockID: blockID,
@@ -306,16 +307,18 @@ func (c *cachedConn) ping() error {
 }
 
 type connCache struct {
-	mu         sync.Mutex
-	cond       *sync.Cond
-	conns      map[string][]*cachedConn
-	maxPerAddr int
+	mu          sync.Mutex
+	cond        *sync.Cond
+	conns       map[string][]*cachedConn
+	maxPerAddr  int
+	dialTimeout time.Duration
 }
 
-func newConnCache(maxPerAddr int) *connCache {
+func newConnCache(maxPerAddr int, dialTimeout time.Duration) *connCache {
 	c := &connCache{
-		conns:      make(map[string][]*cachedConn),
-		maxPerAddr: maxPerAddr,
+		conns:       make(map[string][]*cachedConn),
+		maxPerAddr:  maxPerAddr,
+		dialTimeout: dialTimeout,
 	}
 	c.cond = sync.NewCond(&c.mu)
 	return c
@@ -343,7 +346,11 @@ func (c *connCache) Acquire(addr string) (*cachedConn, func(drop bool), error) {
 		}
 		c.mu.Unlock()
 
-		netConn, err := net.Dial("tcp", addr)
+		dialer := &net.Dialer{}
+		if c.dialTimeout > 0 {
+			dialer.Timeout = c.dialTimeout
+		}
+		netConn, err := dialer.Dial("tcp", addr)
 		if err != nil {
 			return nil, nil, err
 		}

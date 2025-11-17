@@ -13,6 +13,7 @@ func main() {
 	addr := flag.String("addr", ":8090", "address to expose the UI and REST API")
 	metadataAddr := flag.String("metadata-server", ":8080", "TCP address of the metadata server")
 	downloadConcurrency := flag.Int("download-concurrency", 4, "maximum number of file blocks to download concurrently")
+
 	flag.Parse()
 
 	staticFS, err := fs.Sub(ui.Static, "static")
@@ -24,6 +25,7 @@ func main() {
 	defer srv.Close()
 
 	log.Printf("UI server listening on %s (metadata=%s)", *addr, *metadataAddr)
+
 	if err := http.ListenAndServe(*addr, srv.routes()); err != nil {
 		log.Fatalf("ui server failed: %v", err)
 	}

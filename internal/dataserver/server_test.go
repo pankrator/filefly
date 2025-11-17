@@ -11,20 +11,24 @@ import (
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
+
 	srv, err := New(":0", dir)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+
 	return srv
 }
 
 func TestStoreAndRetrieveWithChecksum(t *testing.T) {
 	srv := newTestServer(t)
 	data := []byte("hello world")
+
 	req := protocol.DataServerRequest{
 		BlockID: "block-1",
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
+
 	if resp := srv.store(req); resp.Status != "ok" {
 		t.Fatalf("store failed: %+v", resp)
 	}
@@ -35,6 +39,7 @@ func TestStoreAndRetrieveWithChecksum(t *testing.T) {
 	if _, err := os.Stat(blockPath); err != nil {
 		t.Fatalf("block not stored: %v", err)
 	}
+
 	if _, err := os.Stat(checksumPath); err != nil {
 		t.Fatalf("checksum not stored: %v", err)
 	}
@@ -43,10 +48,12 @@ func TestStoreAndRetrieveWithChecksum(t *testing.T) {
 	if retrieveResp.Status != "ok" {
 		t.Fatalf("retrieve failed: %+v", retrieveResp)
 	}
+
 	decoded, err := base64.StdEncoding.DecodeString(retrieveResp.Data)
 	if err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
+
 	if string(decoded) != string(data) {
 		t.Fatalf("unexpected data: got %q want %q", decoded, data)
 	}
@@ -55,10 +62,12 @@ func TestStoreAndRetrieveWithChecksum(t *testing.T) {
 func TestRetrieveChecksumMismatch(t *testing.T) {
 	srv := newTestServer(t)
 	data := []byte("original data")
+
 	req := protocol.DataServerRequest{
 		BlockID: "block-2",
 		Data:    base64.StdEncoding.EncodeToString(data),
 	}
+
 	if resp := srv.store(req); resp.Status != "ok" {
 		t.Fatalf("store failed: %+v", resp)
 	}
@@ -72,6 +81,7 @@ func TestRetrieveChecksumMismatch(t *testing.T) {
 	if resp.Status != "error" {
 		t.Fatalf("expected error, got %+v", resp)
 	}
+
 	if resp.Error != "checksum mismatch" {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
@@ -79,10 +89,12 @@ func TestRetrieveChecksumMismatch(t *testing.T) {
 
 func TestRetrieveMissingChecksum(t *testing.T) {
 	srv := newTestServer(t)
+
 	req := protocol.DataServerRequest{
 		BlockID: "block-3",
 		Data:    base64.StdEncoding.EncodeToString([]byte("data")),
 	}
+
 	if resp := srv.store(req); resp.Status != "ok" {
 		t.Fatalf("store failed: %+v", resp)
 	}
@@ -95,6 +107,7 @@ func TestRetrieveMissingChecksum(t *testing.T) {
 	if resp.Status != "error" {
 		t.Fatalf("expected error, got %+v", resp)
 	}
+
 	if resp.Error != "checksum file missing" {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
@@ -102,10 +115,12 @@ func TestRetrieveMissingChecksum(t *testing.T) {
 
 func TestDeleteRemovesChecksum(t *testing.T) {
 	srv := newTestServer(t)
+
 	req := protocol.DataServerRequest{
 		BlockID: "block-4",
 		Data:    base64.StdEncoding.EncodeToString([]byte("data")),
 	}
+
 	if resp := srv.store(req); resp.Status != "ok" {
 		t.Fatalf("store failed: %+v", resp)
 	}
@@ -117,6 +132,7 @@ func TestDeleteRemovesChecksum(t *testing.T) {
 	if _, err := os.Stat(srv.blockPath("block-4")); !os.IsNotExist(err) {
 		t.Fatalf("block file still exists: %v", err)
 	}
+
 	if _, err := os.Stat(srv.checksumPath("block-4")); !os.IsNotExist(err) {
 		t.Fatalf("checksum file still exists: %v", err)
 	}

@@ -25,23 +25,28 @@ func (p *blockPlanner) Plan(name string, totalSize, requestedReplicas int) (*pro
 	if p == nil {
 		return nil, fmt.Errorf("planner is nil")
 	}
+
 	if p.blockSize <= 0 {
 		return nil, fmt.Errorf("invalid block size")
 	}
+
 	replicas, err := p.selector.Validate(requestedReplicas)
 	if err != nil {
 		return nil, err
 	}
+
 	blocks, err := p.planBlocks(name, totalSize, replicas)
 	if err != nil {
 		return nil, err
 	}
+
 	meta := protocol.FileMetadata{
 		Name:      name,
 		TotalSize: totalSize,
 		Blocks:    blocks,
 		Replicas:  replicas,
 	}
+
 	return &meta, nil
 }
 
@@ -49,22 +54,28 @@ func (p *blockPlanner) planBlocks(fileName string, totalSize, replicas int) ([]p
 	if totalSize == 0 {
 		return nil, nil
 	}
+
 	blocks := make([]protocol.BlockRef, 0, totalSize/p.blockSize+1)
+
 	remaining := totalSize
 	for remaining > 0 {
 		chunkSize := p.blockSize
 		if chunkSize > remaining {
 			chunkSize = remaining
 		}
+
 		blockID := fmt.Sprintf("%s-%d", fileName, len(blocks))
+
 		servers, err := p.selector.NextSet(replicas)
 		if err != nil {
 			return nil, err
 		}
+
 		replicasMeta := make([]protocol.BlockReplica, 0, len(servers))
 		for _, addr := range servers {
 			replicasMeta = append(replicasMeta, protocol.BlockReplica{DataServer: addr})
 		}
+
 		blocks = append(blocks, protocol.BlockRef{
 			ID:       blockID,
 			Size:     chunkSize,
@@ -72,6 +83,7 @@ func (p *blockPlanner) planBlocks(fileName string, totalSize, replicas int) ([]p
 		})
 		remaining -= chunkSize
 	}
+
 	return blocks, nil
 }
 
@@ -90,38 +102,49 @@ func (r *roundRobinSelector) Validate(requested int) (int, error) {
 	if len(r.servers) == 0 {
 		return 0, fmt.Errorf("no data servers configured")
 	}
+
 	if requested <= 0 {
 		requested = 1
 	}
+
 	if requested > len(r.servers) {
 		return 0, fmt.Errorf("replica count %d exceeds available data servers (%d)", requested, len(r.servers))
 	}
+
 	return requested, nil
 }
 
 func (r *roundRobinSelector) NextSet(count int) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	if len(r.servers) == 0 {
 		return nil, fmt.Errorf("no data servers configured")
 	}
+
 	set := make([]string, 0, count)
+
 	for i := 0; i < count; i++ {
 		addr := r.servers[r.next%len(r.servers)]
 		r.next++
+
 		set = append(set, addr)
 	}
+
 	return set, nil
 }
 
 func (r *roundRobinSelector) SetServers(servers []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	copy := append([]string(nil), servers...)
+
 	r.servers = copy
 	if len(r.servers) == 0 {
 		r.next = 0
 		return
 	}
+
 	r.next = r.next % len(r.servers)
 }

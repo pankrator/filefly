@@ -15,9 +15,11 @@ func main() {
 	dataServers := flag.String("data-servers", ":8081", "comma separated list of data server addresses")
 	metadataFile := flag.String("metadata-file", "metadata.json", "path to persist metadata snapshots")
 	persistInterval := flag.Duration("persist-interval", 30*time.Second, "how often to persist metadata")
+
 	flag.Parse()
 
 	var servers []string
+
 	for _, s := range strings.Split(*dataServers, ",") {
 		trimmed := strings.TrimSpace(s)
 		if trimmed != "" {

@@ -31,10 +31,12 @@ func newDataHealthMonitor(servers []string, client *dataServerClient, interval t
 	if interval <= 0 {
 		interval = defaultHealthCheckInterval
 	}
+
 	retryInterval := defaultRetryInterval
 	if interval > retryInterval {
 		retryInterval = interval
 	}
+
 	return &dataHealthMonitor{
 		client:        client,
 		servers:       append([]string(nil), servers...),
@@ -49,7 +51,9 @@ func (m *dataHealthMonitor) Start() {
 	if m == nil {
 		return
 	}
+
 	m.wg.Add(1)
+
 	go m.run()
 }
 
@@ -57,6 +61,7 @@ func (m *dataHealthMonitor) Stop() {
 	if m == nil {
 		return
 	}
+
 	m.once.Do(func() {
 		close(m.stop)
 	})
@@ -65,11 +70,14 @@ func (m *dataHealthMonitor) Stop() {
 
 func (m *dataHealthMonitor) run() {
 	defer m.wg.Done()
+
 	m.checkAllServers()
 	healthTicker := time.NewTicker(m.interval)
 	retryTicker := time.NewTicker(m.retryInterval)
+
 	defer healthTicker.Stop()
 	defer retryTicker.Stop()
+
 	for {
 		select {
 		case <-healthTicker.C:
@@ -105,28 +113,36 @@ func (m *dataHealthMonitor) check(addr string) {
 		m.record(addr, time.Now().UTC(), false, "metadata server has no data client")
 		return
 	}
+
 	err := m.client.Ping(addr)
+
 	now := time.Now().UTC()
+
 	if err != nil {
 		m.record(addr, now, false, err.Error())
 		return
 	}
+
 	m.record(addr, now, true, "")
 }
 
 func (m *dataHealthMonitor) record(addr string, ts time.Time, healthy bool, errMsg string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	status := m.statuses[addr]
 	status.Address = addr
 	status.LastChecked = ts
+
 	status.Healthy = healthy
+
 	if healthy {
 		status.LastPong = ts
 		status.Error = ""
 	} else {
 		status.Error = errMsg
 	}
+
 	m.statuses[addr] = status
 }
 
@@ -134,16 +150,21 @@ func (m *dataHealthMonitor) List() []protocol.DataServerHealth {
 	if m == nil {
 		return nil
 	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	result := make([]protocol.DataServerHealth, 0, len(m.servers))
+
 	for _, addr := range m.servers {
 		if status, ok := m.statuses[addr]; ok {
 			result = append(result, status)
 			continue
 		}
+
 		result = append(result, protocol.DataServerHealth{Address: addr})
 	}
+
 	return result
 }
 
@@ -151,13 +172,16 @@ func (m *dataHealthMonitor) EnsureServer(addr string) {
 	if m == nil {
 		return
 	}
+
 	m.mu.Lock()
+
 	for _, existing := range m.servers {
 		if existing == addr {
 			m.mu.Unlock()
 			return
 		}
 	}
+
 	m.servers = append(m.servers, addr)
 	m.mu.Unlock()
 }
@@ -166,36 +190,44 @@ func (m *dataHealthMonitor) CheckNow(addr string) {
 	if m == nil || addr == "" {
 		return
 	}
+
 	go m.check(addr)
 }
 
 func (m *dataHealthMonitor) snapshotServers() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	return append([]string(nil), m.servers...)
 }
 
 func (m *dataHealthMonitor) healthyServers() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	result := make([]string, 0, len(m.servers))
+
 	for _, addr := range m.servers {
 		status, ok := m.statuses[addr]
 		if !ok || status.Healthy {
 			result = append(result, addr)
 		}
 	}
+
 	return result
 }
 
 func (m *dataHealthMonitor) unhealthyServers() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	var result []string
+
 	for addr, status := range m.statuses {
 		if !status.Healthy {
 			result = append(result, addr)
 		}
 	}
+
 	return result
 }

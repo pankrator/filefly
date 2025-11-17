@@ -21,6 +21,7 @@ func newUIServer(metadataAddr string, static http.FileSystem, downloadConcurrenc
 	if downloadConcurrency <= 0 {
 		downloadConcurrency = 1
 	}
+
 	return &uiServer{
 		metadata:            newMetadataClient(metadataAddr),
 		static:              static,
@@ -48,6 +49,7 @@ func (s *uiServer) routes() http.Handler {
 	mux.HandleFunc("/api/files/", s.handleFileDetail)
 	mux.HandleFunc("/api/data-servers", s.handleDataServers)
 	mux.Handle("/", http.FileServer(s.static))
+
 	return mux
 }
 
@@ -67,11 +69,13 @@ func (s *uiServer) handleDataServers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
 	servers, err := s.metadata.listDataServers()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("list data servers: %v", err), http.StatusInternalServerError)
 		return
 	}
+
 	respondJSON(w, map[string]any{"servers": servers})
 }
 
@@ -81,16 +85,19 @@ func (s *uiServer) handleListFiles(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, fmt.Sprintf("list files: %v", err), http.StatusInternalServerError)
 		return
 	}
+
 	respondJSON(w, map[string]any{"files": files})
 }
 
+//nolint:funlen
 func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
+
 	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
+		defer r.MultipartForm.RemoveAll() //nolint:errcheck
 	}
 
 	file, header, err := r.FormFile("file")
@@ -98,12 +105,13 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing file", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 
 	name := strings.TrimSpace(r.FormValue("name"))
 	if name == "" && header != nil {
 		name = header.Filename
 	}
+
 	if name == "" {
 		http.Error(w, "missing file name", http.StatusBadRequest)
 		return
@@ -116,16 +124,19 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	replicas := 0
+
 	if raw := strings.TrimSpace(r.FormValue("replicas")); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value <= 0 {
 			http.Error(w, "replicas must be a positive number", http.StatusBadRequest)
 			return
 		}
+
 		replicas = value
 	}
 
 	log.Printf("ui: upload request for %s (%d bytes, replicas=%d)", name, totalSize, replicas)
+
 	meta, err := s.metadata.planFile(name, totalSize, replicas)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("plan file: %v", err), http.StatusInternalServerError)
@@ -136,6 +147,7 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("rewind upload data: %v", err), http.StatusInternalServerError)
 		return
 	}
+
 	if err := s.transfer.UploadBlocksFrom(meta.Blocks, file); err != nil {
 		http.Error(w, fmt.Sprintf("upload blocks: %v", err), http.StatusInternalServerError)
 		return
@@ -156,22 +168,29 @@ func (s *uiServer) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
 	parts := strings.Split(trimmed, "/")
+
 	name, err := url.PathUnescape(parts[0])
 	if err != nil {
 		http.Error(w, "invalid file name", http.StatusBadRequest)
 		return
 	}
+
 	if len(parts) > 1 {
 		if parts[1] == "content" {
 			if r.Method != http.MethodGet {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
+
 			s.handleDownload(w, r, name)
+
 			return
 		}
+
 		http.NotFound(w, r)
+
 		return
 	}
 
@@ -182,13 +201,16 @@ func (s *uiServer) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 			s.handleMetadataError(w, r, err)
 			return
 		}
+
 		respondJSON(w, map[string]any{"file": meta})
 	case http.MethodDelete:
 		log.Printf("ui: delete requested for %s", name)
+
 		if err := s.metadata.deleteFile(name); err != nil {
 			s.handleMetadataError(w, r, err)
 			return
 		}
+
 		log.Printf("ui: deleted %s", name)
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -204,6 +226,7 @@ func (s *uiServer) handleDownload(w http.ResponseWriter, r *http.Request, name s
 	}
 
 	log.Printf("ui: downloading %s (%d blocks)", meta.Name, len(meta.Blocks))
+
 	data, err := s.transfer.DownloadFile(meta, s.downloadConcurrency)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("download file: %v", err), http.StatusInternalServerError)
@@ -223,6 +246,7 @@ func (s *uiServer) handleMetadataError(w http.ResponseWriter, r *http.Request, e
 		http.NotFound(w, r)
 		return
 	}
+
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
@@ -231,21 +255,27 @@ func uploadFileSize(file multipart.File, header *multipart.FileHeader) (int, err
 		if header.Size > int64(math.MaxInt) {
 			return 0, fmt.Errorf("file too large: %d bytes exceeds supported size", header.Size)
 		}
+
 		if err := rewindMultipartFile(file); err != nil {
 			return 0, err
 		}
+
 		return int(header.Size), nil
 	}
+
 	size, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
+
 	if size > int64(math.MaxInt) {
 		return 0, fmt.Errorf("file too large: %d bytes exceeds supported size", size)
 	}
+
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return 0, err
 	}
+
 	return int(size), nil
 }
 
@@ -253,11 +283,13 @@ func rewindMultipartFile(file multipart.File) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func respondJSON(w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json")
+
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 	}

@@ -8,8 +8,23 @@ linters:
     - govet
     - staticcheck
     - errcheck
-    - revive
     - ineffassign
+    - forcetypeassert
+    - funlen
+    - contextcheck
+    - gocognit
+    - goconst
+    - nolintlint
+    # - cyclop
+    # - err113
+    - whitespace
+    - wsl_v5
+    - wsl
+    - unused
+    # - wrapcheck
+    # - gocritic
+    # - gofumpt is a formatter (moved to formatters below)
+    - lll        # line length linter
 formatters:
   enable:
     - gofmt
@@ -18,8 +33,14 @@ formatters-settings:
   gofmt:
     simplify: true
 linters-settings:
+  # cyclop:
+  #   max-complexity: 30
+  #   min-complexity: 30
   revive:
     ignore-generated-header: true
+  lll:
+    line-length: 100
+    tab-width: 1
 issues:
   exclude-use-default: false
   max-issues-per-linter: 0

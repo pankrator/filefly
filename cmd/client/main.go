@@ -19,6 +19,7 @@ func main() {
 	filePath := flag.String("file", "", "path to the file to upload")
 	fileName := flag.String("name", "", "remote file name (defaults to the base name of --file)")
 	replicas := flag.Int("replicas", 1, "number of replicas per block")
+
 	flag.Parse()
 
 	if *filePath == "" {
@@ -35,6 +36,7 @@ func main() {
 	}
 
 	log.Printf("requesting upload plan for %s (%d bytes, replicas=%d)", *fileName, len(data), *replicas)
+
 	plan, err := requestPlan(*metadataAddr, *fileName, len(data), *replicas)
 	if err != nil {
 		log.Fatalf("request plan: %v", err)
@@ -45,6 +47,7 @@ func main() {
 	}
 
 	log.Printf("received plan for %s: %d blocks", plan.Metadata.Name, len(plan.Metadata.Blocks))
+
 	if len(plan.Metadata.Blocks) == 0 {
 		log.Printf("file %s has no data to upload", plan.Metadata.Name)
 		return
@@ -58,11 +61,15 @@ func main() {
 	}
 
 	log.Printf("finalizing metadata for %s", plan.Metadata.Name)
+
 	if err := completeUpload(*metadataAddr, plan.Metadata); err != nil {
 		log.Fatalf("finalize upload: %v", err)
 	}
 
-	log.Printf("uploaded %s (%d bytes) in %d blocks", plan.Metadata.Name, plan.Metadata.TotalSize, len(plan.Metadata.Blocks))
+	log.Printf("uploaded %s (%d bytes) in %d blocks",
+		plan.Metadata.Name,
+		plan.Metadata.TotalSize,
+		len(plan.Metadata.Blocks))
 }
 
 func requestPlan(addr, fileName string, size, replicas int) (*protocol.MetadataResponse, error) {
@@ -70,10 +77,11 @@ func requestPlan(addr, fileName string, size, replicas int) (*protocol.MetadataR
 	if err != nil {
 		return nil, fmt.Errorf("connect to metadata server: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(bufio.NewReader(conn))
+
 	req := protocol.MetadataRequest{
 		Command:  "store_file",
 		FileName: fileName,
@@ -88,12 +96,15 @@ func requestPlan(addr, fileName string, size, replicas int) (*protocol.MetadataR
 	if err := dec.Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
 	if resp.Status != "ok" {
 		if resp.Error == "" {
 			resp.Error = "metadata server returned error"
 		}
+
 		return nil, fmt.Errorf(resp.Error)
 	}
+
 	return &resp, nil
 }
 
@@ -101,14 +112,17 @@ func completeUpload(addr string, meta *protocol.FileMetadata) error {
 	if meta == nil {
 		return fmt.Errorf("nil metadata")
 	}
+
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("connect to metadata server: %w", err)
 	}
-	defer conn.Close()
+
+	defer conn.Close() //nolint:errcheck
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(bufio.NewReader(conn))
+
 	req := protocol.MetadataRequest{Command: "complete_file", Metadata: meta}
 	if err := enc.Encode(req); err != nil {
 		return fmt.Errorf("send complete_file: %w", err)
@@ -118,11 +132,14 @@ func completeUpload(addr string, meta *protocol.FileMetadata) error {
 	if err := dec.Decode(&resp); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
+
 	if resp.Status != "ok" {
 		if resp.Error == "" {
 			resp.Error = "metadata server returned error"
 		}
+
 		return fmt.Errorf(resp.Error)
 	}
+
 	return nil
 }

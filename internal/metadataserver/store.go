@@ -41,48 +41,61 @@ type memoryStore struct {
 func (s *memoryStore) Save(meta protocol.FileMetadata) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, deleting := s.deleting[meta.Name]; deleting {
 		return ErrDeleteInProgress
 	}
+
 	s.files[meta.Name] = meta
+
 	return nil
 }
 
 func (s *memoryStore) Get(name string) (protocol.FileMetadata, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	meta, ok := s.files[name]
+
 	return meta, ok
 }
 
 func (s *memoryStore) List() []protocol.FileMetadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	files := make([]protocol.FileMetadata, 0, len(s.files))
 	for _, meta := range s.files {
 		files = append(files, meta)
 	}
+
 	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+
 	return files
 }
 
 func (s *memoryStore) BeginDelete(name string) (protocol.FileMetadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	meta, ok := s.files[name]
 	if !ok {
 		return protocol.FileMetadata{}, ErrFileNotFound
 	}
+
 	if _, deleting := s.deleting[name]; deleting {
 		return protocol.FileMetadata{}, ErrDeleteInProgress
 	}
+
 	s.deleting[name] = struct{}{}
+
 	return meta, nil
 }
 
 func (s *memoryStore) CompleteDelete(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	delete(s.files, name)
 	delete(s.deleting, name)
 }
@@ -90,25 +103,30 @@ func (s *memoryStore) CompleteDelete(name string) {
 func (s *memoryStore) CancelDelete(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	delete(s.deleting, name)
 }
 
 func (s *memoryStore) Snapshot() map[string]protocol.FileMetadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	snapshot := make(map[string]protocol.FileMetadata, len(s.files))
 	for name, meta := range s.files {
 		snapshot[name] = meta
 	}
+
 	return snapshot
 }
 
 func (s *memoryStore) Restore(files map[string]protocol.FileMetadata) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if files == nil {
 		files = make(map[string]protocol.FileMetadata)
 	}
+
 	s.files = files
 	s.deleting = make(map[string]struct{})
 }

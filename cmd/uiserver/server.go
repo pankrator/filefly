@@ -136,8 +136,7 @@ func (s *uiServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("rewind upload data: %v", err), http.StatusInternalServerError)
 		return
 	}
-	reader := io.LimitReader(file, int64(meta.TotalSize))
-	if err := s.transfer.UploadBlocksFrom(meta.Blocks, reader); err != nil {
+	if err := s.transfer.UploadBlocksFrom(meta.Blocks, file); err != nil {
 		http.Error(w, fmt.Sprintf("upload blocks: %v", err), http.StatusInternalServerError)
 		return
 	}

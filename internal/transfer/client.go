@@ -2,9 +2,12 @@ package transfer
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -92,27 +95,38 @@ func (c *Client) Close() {
 // UploadBlocks streams the provided data to the configured data servers based
 // on the block placement metadata.
 func (c *Client) UploadBlocks(blocks []protocol.BlockRef, data []byte) error {
+	return c.UploadBlocksFrom(blocks, bytes.NewReader(data))
+}
+
+// UploadBlocksFrom reads the source incrementally and uploads data according to
+// the provided block plan. It prevents callers from having to materialize the
+// entire file in memory before beginning an upload.
+func (c *Client) UploadBlocksFrom(blocks []protocol.BlockRef, src io.Reader) error {
 	if c == nil {
 		return fmt.Errorf("transfer client is nil")
 	}
-	offset := 0
 	for _, block := range blocks {
 		replicas := normalizeBlockReplicas(block)
 		if len(replicas) == 0 {
 			return fmt.Errorf("block %s has no replicas to upload", block.ID)
 		}
-		end := offset + block.Size
-		if end > len(data) {
-			return fmt.Errorf("block %s exceeds file size", block.ID)
+		chunk := make([]byte, block.Size)
+		if _, err := io.ReadFull(src, chunk); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("block %s: source ended before reading %d bytes", block.ID, block.Size)
+			}
+			return fmt.Errorf("read block %s: %w", block.ID, err)
 		}
-		chunk := data[offset:end]
 		if err := c.uploadBlock(block.ID, replicas, chunk); err != nil {
 			return err
 		}
-		offset = end
 	}
-	if offset != len(data) {
-		return fmt.Errorf("plan left %d bytes unused", len(data)-offset)
+	extra := make([]byte, 1)
+	if n, err := src.Read(extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("plan left at least %d unexpected bytes", n)
+		}
+		return fmt.Errorf("read trailing data: %w", err)
 	}
 	return nil
 }

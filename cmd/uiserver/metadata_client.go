@@ -49,6 +49,7 @@ func (c *metadataClient) verifyDataServer(addr string) (*protocol.DataServerHeal
 	}
 
 	server := resp.Servers[0]
+
 	return &server, nil
 }
 

@@ -18,7 +18,6 @@ linters:
     # - cyclop
     # - err113
     - whitespace
-    - wsl_v5
     - wsl
     - unused
     # - wrapcheck

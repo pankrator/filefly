@@ -251,7 +251,7 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 	}
 
 	if crc32.ChecksumIEEE(data) != storedChecksum {
-		return protocol.DataServerResponse{Status: "error", Error: "checksum mismatch"}
+		return protocol.DataServerResponse{Status: "error", Error: errChecksumMismatch}
 	}
 
 	log.Printf("dataserver: retrieved block %s (%d bytes)", req.BlockID, len(data))

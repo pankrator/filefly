@@ -44,6 +44,7 @@ func (v *blockVerifier) Start() {
 	}
 
 	v.wg.Add(1)
+
 	go v.run()
 }
 
@@ -110,6 +111,7 @@ func (v *blockVerifier) VerifyAll() (*protocol.BlockVerificationSummary, error) 
 		for _, entry := range unhealthy {
 			summary.CorruptedBlocks = append(summary.CorruptedBlocks, entry)
 		}
+
 		sort.Slice(summary.CorruptedBlocks, func(i, j int) bool {
 			return summary.CorruptedBlocks[i].BlockID < summary.CorruptedBlocks[j].BlockID
 		})
@@ -128,6 +130,7 @@ func (v *blockVerifier) VerifyBlock(blockID string) protocol.BlockVerification {
 	result := v.server.verifyBlockIntegrity(blockID)
 
 	v.mu.Lock()
+
 	if v.corrupted == nil {
 		v.corrupted = make(map[string]protocol.BlockVerification)
 	}
@@ -138,6 +141,7 @@ func (v *blockVerifier) VerifyBlock(blockID string) protocol.BlockVerification {
 		v.corrupted[blockID] = result
 		log.Printf("dataserver: verification failed for %s: %s", blockID, result.Error)
 	}
+
 	v.mu.Unlock()
 
 	return result
@@ -171,6 +175,7 @@ func (v *blockVerifier) Summary() *protocol.BlockVerificationSummary {
 		for _, entry := range v.corrupted {
 			summary.CorruptedBlocks = append(summary.CorruptedBlocks, entry)
 		}
+
 		sort.Slice(summary.CorruptedBlocks, func(i, j int) bool {
 			return summary.CorruptedBlocks[i].BlockID < summary.CorruptedBlocks[j].BlockID
 		})
@@ -186,6 +191,7 @@ func (s *Server) listBlockIDs() ([]string, error) {
 	}
 
 	var result []string
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -206,6 +212,7 @@ func (s *Server) listBlockIDs() ([]string, error) {
 	}
 
 	sort.Strings(result)
+
 	return result, nil
 }
 
@@ -235,7 +242,9 @@ func (s *Server) verifyBlockIntegrity(blockID string) protocol.BlockVerification
 	checksumPath := s.checksumPath(blockID)
 
 	s.mu.RLock()
+
 	data, err := os.ReadFile(path)
+
 	s.mu.RUnlock()
 
 	if err != nil {
@@ -249,7 +258,9 @@ func (s *Server) verifyBlockIntegrity(blockID string) protocol.BlockVerification
 	}
 
 	s.mu.RLock()
+
 	storedChecksum, err := readChecksum(checksumPath)
+
 	s.mu.RUnlock()
 
 	if err != nil {

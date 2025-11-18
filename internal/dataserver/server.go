@@ -240,6 +240,7 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 	}
 
 	storedChecksum, err := readChecksum(checksumPath)
+
 	s.mu.RUnlock()
 
 	if err != nil {

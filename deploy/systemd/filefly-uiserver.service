@@ -5,7 +5,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-Environment=FILEFLY_UISERVER_ADDR=:8090
+Environment=FILEFLY_UISERVER_ADDR=0.0.0.0:8090
 Environment=FILEFLY_UISERVER_METADATA_SERVER=localhost:9000
 Environment=FILEFLY_UISERVER_DOWNLOAD_CONCURRENCY=4
 Environment=FILEFLY_UISERVER_EXTRA_FLAGS=

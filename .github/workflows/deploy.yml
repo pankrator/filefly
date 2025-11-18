@@ -1,9 +1,6 @@
 name: Build and Deploy FileFly
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -58,11 +55,12 @@ jobs:
             set -euo pipefail
             ARCHIVE=${{ env.DEPLOY_TARGET_DIR }}/filefly-artifacts.tar.gz
             RELEASE_DIR=${{ env.DEPLOY_TARGET_DIR }}/current
-            BIN_DIR=/opt/filefly/bin
-            sudo mkdir -p "$RELEASE_DIR" "$BIN_DIR"
-            sudo mkdir -p /var/lib/filefly/dataserver /var/lib/filefly/metadataserver /var/lib/filefly/uiserver
+            BIN_DIR=/home/ec2-user/bin
+            mkdir -p "$RELEASE_DIR" "$BIN_DIR"
+            mkdir -p /var/lib/filefly/dataserver /var/lib/filefly/metadataserver /var/lib/filefly/uiserver
             tar xzf "$ARCHIVE" -C "$RELEASE_DIR" --strip-components=0
-            sudo cp "$RELEASE_DIR"/build/* "$BIN_DIR"/
+            cp "$RELEASE_DIR"/build/* "$BIN_DIR"/
+
             sudo chmod 755 "$BIN_DIR"/*
             sudo cp "$RELEASE_DIR"/deploy/systemd/filefly-*.service /etc/systemd/system/
             sudo chmod 644 /etc/systemd/system/filefly-*.service

@@ -386,6 +386,7 @@ func (s *Server) verifyDataServer(req protocol.MetadataRequest) protocol.Metadat
 	}
 
 	health := protocol.DataServerHealth{Address: addr, Verification: summary}
+
 	return protocol.MetadataResponse{Status: "ok", Servers: []protocol.DataServerHealth{health}}
 }
 

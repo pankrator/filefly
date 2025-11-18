@@ -1,0 +1,17 @@
+[Unit]
+Description=FileFly data server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=FILEFLY_DATASERVER_ADDR=:9001
+Environment=FILEFLY_DATASERVER_STORAGE_DIR=/var/lib/filefly/dataserver
+Environment=FILEFLY_DATASERVER_EXTRA_FLAGS=
+ExecStart=/opt/filefly/bin/dataserver --addr ${FILEFLY_DATASERVER_ADDR} --storage_dir ${FILEFLY_DATASERVER_STORAGE_DIR} ${FILEFLY_DATASERVER_EXTRA_FLAGS}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

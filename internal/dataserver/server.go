@@ -225,7 +225,9 @@ func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerRes
 
 	path := s.blockPath(req.BlockID)
 	checksumPath := s.checksumPath(req.BlockID)
+
 	s.mu.RLock()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		s.mu.RUnlock()

@@ -61,8 +61,7 @@ services:
     working_dir: /app
     entrypoint: ["/bin/sh", "-c"]
     command: >-
-      go run ./cmd/checksum-migrator --storage_dir /blocks1 &&
-      go run ./cmd/checksum-migrator --storage_dir /blocks2
+      "go run ./cmd/checksum-migrator --storage_dir /blocks2"
     volumes:
       - .:/app
       - blocks1:/blocks1

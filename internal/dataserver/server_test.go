@@ -137,3 +137,48 @@ func TestDeleteRemovesChecksum(t *testing.T) {
 		t.Fatalf("checksum file still exists: %v", err)
 	}
 }
+
+func TestVerifyCommands(t *testing.T) {
+	srv := newTestServer(t)
+	data := []byte("verify me")
+	req := protocol.DataServerRequest{BlockID: "verify-1", Data: base64.StdEncoding.EncodeToString(data)}
+
+	if resp := srv.store(req); resp.Status != "ok" {
+		t.Fatalf("store failed: %+v", resp)
+	}
+
+	resp := srv.verifyBlockCommand(protocol.DataServerRequest{BlockID: "verify-1"})
+	if resp.Status != "ok" || len(resp.Verifications) != 1 {
+		t.Fatalf("unexpected verify response: %+v", resp)
+	}
+
+	if !resp.Verifications[0].Healthy {
+		t.Fatalf("expected healthy verification result: %+v", resp.Verifications[0])
+	}
+
+	if err := os.WriteFile(srv.blockPath("verify-1"), []byte("bad"), 0o644); err != nil {
+		t.Fatalf("corrupt block: %v", err)
+	}
+
+	resp = srv.verifyBlockCommand(protocol.DataServerRequest{BlockID: "verify-1"})
+	if resp.Status != "ok" || len(resp.Verifications) != 1 {
+		t.Fatalf("unexpected verify response after corruption: %+v", resp)
+	}
+
+	if resp.Verifications[0].Healthy {
+		t.Fatalf("expected unhealthy result: %+v", resp.Verifications[0])
+	}
+
+	if resp.Verifications[0].Error != "checksum mismatch" {
+		t.Fatalf("unexpected error: %s", resp.Verifications[0].Error)
+	}
+
+	allResp := srv.verifyAllCommand()
+	if allResp.Status != "ok" {
+		t.Fatalf("verify_all failed: %+v", allResp)
+	}
+
+	if allResp.VerificationSummary == nil || allResp.VerificationSummary.UnhealthyBlocks == 0 {
+		t.Fatalf("verify_all summary missing corruption: %+v", allResp.VerificationSummary)
+	}
+}

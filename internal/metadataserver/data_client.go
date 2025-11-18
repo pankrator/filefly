@@ -109,6 +109,32 @@ func (c *dataServerClient) Ping(addr string) error {
 	return nil
 }
 
+func (c *dataServerClient) VerificationStatus(addr string) (*protocol.BlockVerificationSummary, error) {
+	resp, err := c.request(addr, protocol.DataServerRequest{Command: "verification_status"})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("data server %s: %s", addr, messageOrDefault(resp.Error, "verification status failed"))
+	}
+
+	return resp.VerificationSummary, nil
+}
+
+func (c *dataServerClient) VerifyAll(addr string) (*protocol.BlockVerificationSummary, error) {
+	resp, err := c.request(addr, protocol.DataServerRequest{Command: "verify_all"})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("data server %s: %s", addr, messageOrDefault(resp.Error, "verify_all failed"))
+	}
+
+	return resp.VerificationSummary, nil
+}
+
 func (c *dataServerClient) request(addr string, req protocol.DataServerRequest) (*protocol.DataServerResponse, error) {
 	dialer := &net.Dialer{Timeout: c.timeout}
 

@@ -145,6 +145,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = protocol.MetadataResponse{Status: "ok"}
 		case "register_data_server":
 			resp = s.registerDataServer(req)
+		case "verify_data_server":
+			resp = s.verifyDataServer(req)
 		default:
 			resp = protocol.MetadataResponse{Status: "error", Error: "unknown command"}
 		}
@@ -364,6 +366,29 @@ func (s *Server) registerDataServer(req protocol.MetadataRequest) protocol.Metad
 	return protocol.MetadataResponse{Status: "ok"}
 }
 
+func (s *Server) verifyDataServer(req protocol.MetadataRequest) protocol.MetadataResponse {
+	addr := strings.TrimSpace(req.DataServerAddr)
+	if addr == "" {
+		return protocol.MetadataResponse{Status: "error", Error: "missing data_server_addr"}
+	}
+
+	if !s.isKnownDataServer(addr) {
+		return protocol.MetadataResponse{Status: "error", Error: "unknown data_server_addr"}
+	}
+
+	if s.dataClient == nil {
+		return protocol.MetadataResponse{Status: "error", Error: "metadata server is not configured with a data client"}
+	}
+
+	summary, err := s.dataClient.VerifyAll(addr)
+	if err != nil {
+		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
+	}
+
+	health := protocol.DataServerHealth{Address: addr, Verification: summary}
+	return protocol.MetadataResponse{Status: "ok", Servers: []protocol.DataServerHealth{health}}
+}
+
 func (s *Server) ensureDataServer(addr string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -388,6 +413,19 @@ func (s *Server) ensureDataServer(addr string) bool {
 	}
 
 	return true
+}
+
+func (s *Server) isKnownDataServer(addr string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, existing := range s.dataServers {
+		if existing == addr {
+			return true
+		}
+	}
+
+	return false
 }
 
 // FetchFileBytes downloads a full file from the data servers.
@@ -419,5 +457,29 @@ func (s *Server) listDataServersResponse() protocol.MetadataResponse {
 		servers = []protocol.DataServerHealth{}
 	}
 
+	s.attachVerification(servers)
+
 	return protocol.MetadataResponse{Status: "ok", Servers: servers}
+}
+
+func (s *Server) attachVerification(servers []protocol.DataServerHealth) {
+	if s == nil || s.dataClient == nil {
+		return
+	}
+
+	for i := range servers {
+		addr := servers[i].Address
+		if addr == "" {
+			continue
+		}
+
+		summary, err := s.dataClient.VerificationStatus(addr)
+		if err != nil {
+			servers[i].VerificationError = err.Error()
+			continue
+		}
+
+		servers[i].VerificationError = ""
+		servers[i].Verification = summary
+	}
 }

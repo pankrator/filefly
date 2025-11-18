@@ -135,6 +135,24 @@ func (c *dataServerClient) VerifyAll(addr string) (*protocol.BlockVerificationSu
 	return resp.VerificationSummary, nil
 }
 
+func (c *dataServerClient) RepairBlock(targetAddr, blockID, sourceAddr string) error {
+	if targetAddr == "" || blockID == "" || sourceAddr == "" {
+		return fmt.Errorf("repair requires target, block_id, and source")
+	}
+
+	req := protocol.DataServerRequest{Command: "repair_block", BlockID: blockID, SourceServer: sourceAddr}
+	resp, err := c.request(targetAddr, req)
+	if err != nil {
+		return err
+	}
+
+	if resp.Status != "ok" {
+		return fmt.Errorf("data server %s: %s", targetAddr, messageOrDefault(resp.Error, "repair failed"))
+	}
+
+	return nil
+}
+
 func (c *dataServerClient) request(addr string, req protocol.DataServerRequest) (*protocol.DataServerResponse, error) {
 	dialer := &net.Dialer{Timeout: c.timeout}
 

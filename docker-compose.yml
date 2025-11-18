@@ -32,6 +32,7 @@ services:
       --data-servers dataserver1:9101,dataserver2:9102
       --metadata-file /metadata/metadata.json
       --persist-interval 30s
+      --integrity-interval 2m
     volumes:
       - .:/app
       - metadata:/metadata

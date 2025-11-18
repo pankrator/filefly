@@ -8,6 +8,9 @@ type DataServerRequest struct {
 	Command string `json:"command"`
 	BlockID string `json:"block_id"`
 	Data    string `json:"data,omitempty"`
+	// SourceServer is used by repair commands so a corrupted replica knows
+	// which peer should be contacted to restore a block.
+	SourceServer string `json:"source_server,omitempty"`
 }
 
 // DataServerResponse is returned by the data server.

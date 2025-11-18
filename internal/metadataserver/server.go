@@ -372,6 +372,10 @@ func (s *Server) verifyDataServer(req protocol.MetadataRequest) protocol.Metadat
 		return protocol.MetadataResponse{Status: "error", Error: "missing data_server_addr"}
 	}
 
+	if !s.isKnownDataServer(addr) {
+		return protocol.MetadataResponse{Status: "error", Error: "unknown data_server_addr"}
+	}
+
 	if s.dataClient == nil {
 		return protocol.MetadataResponse{Status: "error", Error: "metadata server is not configured with a data client"}
 	}
@@ -409,6 +413,19 @@ func (s *Server) ensureDataServer(addr string) bool {
 	}
 
 	return true
+}
+
+func (s *Server) isKnownDataServer(addr string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, existing := range s.dataServers {
+		if existing == addr {
+			return true
+		}
+	}
+
+	return false
 }
 
 // FetchFileBytes downloads a full file from the data servers.

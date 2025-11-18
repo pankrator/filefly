@@ -23,6 +23,7 @@ type metadataStore interface {
 	CancelDelete(name string)
 	Snapshot() map[string]protocol.FileMetadata
 	Restore(files map[string]protocol.FileMetadata)
+	FindBlock(blockID string) (protocol.FileMetadata, protocol.BlockRef, bool)
 }
 
 func newMetadataStore() metadataStore {
@@ -129,4 +130,19 @@ func (s *memoryStore) Restore(files map[string]protocol.FileMetadata) {
 
 	s.files = files
 	s.deleting = make(map[string]struct{})
+}
+
+func (s *memoryStore) FindBlock(blockID string) (protocol.FileMetadata, protocol.BlockRef, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, meta := range s.files {
+		for _, block := range meta.Blocks {
+			if block.ID == blockID {
+				return meta, block, true
+			}
+		}
+	}
+
+	return protocol.FileMetadata{}, protocol.BlockRef{}, false
 }

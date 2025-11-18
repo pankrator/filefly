@@ -28,16 +28,17 @@ type Server struct {
 	persister  *diskPersister
 	dataClient *dataServerClient
 	health     *dataHealthMonitor
+	integrity  *dataIntegrityAuditor
 
 	mu sync.RWMutex
 }
 
 // New creates a metadata server instance.
-func New(addr string, blockSize int, dataServers []string, persistPath string, persistFreq time.Duration) *Server {
+func New(addr string, blockSize int, dataServers []string, persistPath string, persistFreq time.Duration, integrityInterval time.Duration) *Server {
 	selector := newRoundRobinSelector(dataServers)
 	client := newDataServerClient(replicaFetchTimeout)
 
-	return &Server{
+	srv := &Server{
 		addr:        addr,
 		blockSize:   blockSize,
 		dataServers: append([]string(nil), dataServers...),
@@ -49,6 +50,10 @@ func New(addr string, blockSize int, dataServers []string, persistPath string, p
 		dataClient:  client,
 		health:      newDataHealthMonitor(dataServers, client, defaultHealthCheckInterval),
 	}
+
+	srv.integrity = newDataIntegrityAuditor(srv, integrityInterval)
+
+	return srv
 }
 
 // Listen starts the server.
@@ -66,6 +71,11 @@ func (s *Server) Listen() error {
 	if s.health != nil {
 		s.health.Start()
 		defer s.health.Stop()
+	}
+
+	if s.integrity != nil {
+		s.integrity.Start()
+		defer s.integrity.Stop()
 	}
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -382,8 +392,12 @@ func (s *Server) verifyDataServer(req protocol.MetadataRequest) protocol.Metadat
 
 	summary, err := s.dataClient.VerifyAll(addr)
 	if err != nil {
+		s.recordVerification(addr, nil, err)
+
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
+
+	s.recordVerification(addr, summary, nil)
 
 	health := protocol.DataServerHealth{Address: addr, Verification: summary}
 	return protocol.MetadataResponse{Status: "ok", Servers: []protocol.DataServerHealth{health}}
@@ -426,6 +440,66 @@ func (s *Server) isKnownDataServer(addr string) bool {
 	}
 
 	return false
+}
+
+func (s *Server) dataServersSnapshot() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return append([]string(nil), s.dataServers...)
+}
+
+func (s *Server) recordVerification(addr string, summary *protocol.BlockVerificationSummary, err error) {
+	if s.health == nil {
+		return
+	}
+
+	s.health.RecordVerification(addr, summary, err)
+}
+
+func (s *Server) repairReplica(targetAddr, blockID string) error {
+	if s.store == nil {
+		return fmt.Errorf("metadata store not configured")
+	}
+
+	if s.dataClient == nil {
+		return fmt.Errorf("metadata server has no data client")
+	}
+
+	meta, block, ok := s.store.FindBlock(blockID)
+	if !ok {
+		return fmt.Errorf("block %s is unknown to metadata store", blockID)
+	}
+
+	source := s.selectRepairSource(block, targetAddr)
+	if source == "" {
+		return fmt.Errorf("no alternate replica available for %s", blockID)
+	}
+
+	if err := s.dataClient.RepairBlock(targetAddr, blockID, source); err != nil {
+		return fmt.Errorf("repair %s on %s: %w", blockID, targetAddr, err)
+	}
+
+	log.Printf("metadata: instructed %s to repair block %s (%s) using %s", targetAddr, blockID, meta.Name, source)
+
+	return nil
+}
+
+func (s *Server) selectRepairSource(block protocol.BlockRef, target string) string {
+	replicas := normalizeBlockReplicas(block)
+	for _, replica := range replicas {
+		if replica.DataServer == "" || replica.DataServer == target {
+			continue
+		}
+
+		return replica.DataServer
+	}
+
+	if block.DataServer != "" && block.DataServer != target {
+		return block.DataServer
+	}
+
+	return ""
 }
 
 // FetchFileBytes downloads a full file from the data servers.

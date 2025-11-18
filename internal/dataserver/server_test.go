@@ -82,7 +82,7 @@ func TestRetrieveChecksumMismatch(t *testing.T) {
 		t.Fatalf("expected error, got %+v", resp)
 	}
 
-	if resp.Error != "checksum mismatch" {
+	if resp.Error != errChecksumMismatch {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
 }
@@ -169,7 +169,7 @@ func TestVerifyCommands(t *testing.T) {
 		t.Fatalf("expected unhealthy result: %+v", resp.Verifications[0])
 	}
 
-	if resp.Verifications[0].Error != "checksum mismatch" {
+	if resp.Verifications[0].Error != errChecksumMismatch {
 		t.Fatalf("unexpected error: %s", resp.Verifications[0].Error)
 	}
 

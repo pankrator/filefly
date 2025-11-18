@@ -11,7 +11,11 @@ import (
 func main() {
 	addr := flag.String("addr", ":8081", "address to listen on")
 	storageDir := flag.String("storage_dir", "./blocks", "directory used to persist blocks")
-	verifyInterval := flag.Duration("verify-interval", 5*time.Minute, "how often to scan stored blocks for corruption (0 to disable)")
+	verifyInterval := flag.Duration(
+		"verify-interval",
+		5*time.Minute,
+		"how often to scan stored blocks for corruption (0 to disable)",
+	)
 
 	flag.Parse()
 

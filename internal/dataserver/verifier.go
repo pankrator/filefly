@@ -79,7 +79,7 @@ func (v *blockVerifier) VerifyAll() (*protocol.BlockVerificationSummary, error) 
 		return nil, fmt.Errorf("verifier not configured")
 	}
 
-	blockIDs, err := v.server.listBlockIDs()
+	worklist, err := v.server.listBlockEntries()
 	if err != nil {
 		return nil, err
 	}
@@ -87,19 +87,30 @@ func (v *blockVerifier) VerifyAll() (*protocol.BlockVerificationSummary, error) 
 	unhealthy := make(map[string]protocol.BlockVerification)
 	healthyCount := 0
 
-	for _, blockID := range blockIDs {
-		result := v.server.verifyBlockIntegrity(blockID)
+	for _, entry := range worklist {
+		var result protocol.BlockVerification
+
+		if !entry.hasBlockFile {
+			result = protocol.BlockVerification{
+				BlockID:     entry.blockID,
+				LastChecked: time.Now().UTC(),
+				Error:       "block not found",
+			}
+		} else {
+			result = v.server.verifyBlockIntegrity(entry.blockID)
+		}
+
 		if result.Healthy {
 			healthyCount++
 			continue
 		}
 
-		unhealthy[blockID] = result
-		log.Printf("dataserver: verification failed for %s: %s", blockID, result.Error)
+		unhealthy[entry.blockID] = result
+		log.Printf("dataserver: verification failed for %s: %s", entry.blockID, result.Error)
 	}
 
 	summary := &protocol.BlockVerificationSummary{
-		TotalBlocks:     len(blockIDs),
+		TotalBlocks:     len(worklist),
 		HealthyBlocks:   healthyCount,
 		UnhealthyBlocks: len(unhealthy),
 		LastScan:        time.Now().UTC(),
@@ -110,6 +121,7 @@ func (v *blockVerifier) VerifyAll() (*protocol.BlockVerificationSummary, error) 
 		for _, entry := range unhealthy {
 			summary.CorruptedBlocks = append(summary.CorruptedBlocks, entry)
 		}
+
 		sort.Slice(summary.CorruptedBlocks, func(i, j int) bool {
 			return summary.CorruptedBlocks[i].BlockID < summary.CorruptedBlocks[j].BlockID
 		})
@@ -117,7 +129,7 @@ func (v *blockVerifier) VerifyAll() (*protocol.BlockVerificationSummary, error) 
 
 	v.mu.Lock()
 	v.lastScan = summary.LastScan
-	v.lastTotal = len(blockIDs)
+	v.lastTotal = len(worklist)
 	v.corrupted = unhealthy
 	v.mu.Unlock()
 
@@ -171,6 +183,7 @@ func (v *blockVerifier) Summary() *protocol.BlockVerificationSummary {
 		for _, entry := range v.corrupted {
 			summary.CorruptedBlocks = append(summary.CorruptedBlocks, entry)
 		}
+
 		sort.Slice(summary.CorruptedBlocks, func(i, j int) bool {
 			return summary.CorruptedBlocks[i].BlockID < summary.CorruptedBlocks[j].BlockID
 		})
@@ -179,21 +192,30 @@ func (v *blockVerifier) Summary() *protocol.BlockVerificationSummary {
 	return summary
 }
 
-func (s *Server) listBlockIDs() ([]string, error) {
+type blockEntry struct {
+	blockID      string
+	hasBlockFile bool
+}
+
+func (s *Server) listBlockEntries() ([]blockEntry, error) {
 	entries, err := os.ReadDir(s.storageDir)
 	if err != nil {
 		return nil, fmt.Errorf("list blocks: %w", err)
 	}
 
-	ids := make(map[string]struct{})
+	ids := make(map[string]*blockEntry)
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 
 		name := entry.Name()
+		hasBlockFile := true
+
 		if strings.HasSuffix(name, checksumSuffix) {
 			name = strings.TrimSuffix(name, checksumSuffix)
+			hasBlockFile = false
 		}
 
 		blockID, err := decodeBlockID(name)
@@ -202,15 +224,26 @@ func (s *Server) listBlockIDs() ([]string, error) {
 			continue
 		}
 
-		ids[blockID] = struct{}{}
+		info, ok := ids[blockID]
+		if !ok {
+			info = &blockEntry{blockID: blockID}
+			ids[blockID] = info
+		}
+
+		if hasBlockFile {
+			info.hasBlockFile = true
+		}
 	}
 
-	result := make([]string, 0, len(ids))
-	for id := range ids {
-		result = append(result, id)
+	result := make([]blockEntry, 0, len(ids))
+	for _, entry := range ids {
+		result = append(result, *entry)
 	}
 
-	sort.Strings(result)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].blockID < result[j].blockID
+	})
+
 	return result, nil
 }
 
@@ -223,7 +256,10 @@ func decodeBlockID(safeName string) (string, error) {
 	return string(data), nil
 }
 
-const checksumSuffix = ".crc"
+const (
+	checksumSuffix      = ".crc"
+	errChecksumMismatch = "checksum mismatch"
+)
 
 func (s *Server) checksumPath(blockID string) string {
 	return s.blockPath(blockID) + checksumSuffix
@@ -268,7 +304,7 @@ func (s *Server) verifyBlockIntegrity(blockID string) protocol.BlockVerification
 	}
 
 	if crc32.ChecksumIEEE(data) != storedChecksum {
-		result.Error = "checksum mismatch"
+		result.Error = errChecksumMismatch
 		return result
 	}
 

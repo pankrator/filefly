@@ -59,13 +59,17 @@ jobs:
             mkdir -p "$RELEASE_DIR" "$BIN_DIR"
             mkdir -p /var/lib/filefly/dataserver /var/lib/filefly/metadataserver /var/lib/filefly/uiserver
             tar xzf "$ARCHIVE" -C "$RELEASE_DIR" --strip-components=0
+            services=(filefly-dataserver filefly-metadataserver filefly-uiserver)
+            for svc in "${services[@]}"; do
+              sudo systemctl stop "$svc" || true
+            done
             cp "$RELEASE_DIR"/build/* "$BIN_DIR"/
 
             sudo chmod 755 "$BIN_DIR"/*
             sudo cp "$RELEASE_DIR"/deploy/systemd/filefly-*.service /etc/systemd/system/
             sudo chmod 644 /etc/systemd/system/filefly-*.service
             sudo systemctl daemon-reload
-            for svc in filefly-dataserver filefly-metadataserver filefly-uiserver; do
+            for svc in "${services[@]}"; do
               sudo systemctl enable "$svc"
               sudo systemctl restart "$svc"
               sudo systemctl status --no-pager "$svc"

@@ -162,6 +162,34 @@ The browser UI also exposes a **Delete** button in the file details panel,
 which calls the same API and refreshes the file list after the blocks are
 removed.
 
+## Automated deployments
+
+The repository ships with a `Build and Deploy FileFly` GitHub Action that
+cross-compiles the Linux binaries for each server (`cmd/dataserver`,
+`cmd/metadataserver`, and `cmd/uiserver`), archives them together with the
+systemd unit files in `deploy/systemd`, and uploads the bundle to an EC2
+instance. After every successful run the workflow connects to the instance over
+SSH, unpacks the archive into `/opt/filefly/bin`, and restarts all services so
+the new binaries are picked up automatically.
+
+Configure the following secrets in your repository before enabling the
+workflow:
+
+| Secret | Description |
+| --- | --- |
+| `DEPLOY_HOST` | Public DNS name or IP of the EC2 instance. |
+| `DEPLOY_USER` | SSH user that owns the staging directory referenced below. |
+| `SSH_PRIVATE_KEY` | Private key with access to the target instance. |
+| `DEPLOY_TARGET_DIR` | Writable directory on the instance where the workflow can upload the deployment archive (for example `/home/ubuntu/filefly`). |
+
+The service definitions expect the binaries to live in `/opt/filefly/bin` and
+write their state below `/var/lib/filefly`. Each unit exposes overridable
+environment variables so you can customize addresses and flags without editing
+the files. Copying the `deploy/systemd/filefly-*.service` files into
+`/etc/systemd/system` and enabling them (`sudo systemctl enable filefly-…`) will
+ensure the metadata, data, and UI servers start on boot and are restarted after
+every deploy.
+
 ## Configuration
 
 * **block-size** – size of the chunks the metadata server creates when building

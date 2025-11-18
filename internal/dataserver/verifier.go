@@ -185,7 +185,7 @@ func (s *Server) listBlockIDs() ([]string, error) {
 		return nil, fmt.Errorf("list blocks: %w", err)
 	}
 
-	var result []string
+	ids := make(map[string]struct{})
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -193,16 +193,21 @@ func (s *Server) listBlockIDs() ([]string, error) {
 
 		name := entry.Name()
 		if strings.HasSuffix(name, checksumSuffix) {
-			continue
+			name = strings.TrimSuffix(name, checksumSuffix)
 		}
 
 		blockID, err := decodeBlockID(name)
 		if err != nil {
-			log.Printf("dataserver: skip malformed block filename %s: %v", name, err)
+			log.Printf("dataserver: skip malformed block filename %s: %v", entry.Name(), err)
 			continue
 		}
 
-		result = append(result, blockID)
+		ids[blockID] = struct{}{}
+	}
+
+	result := make([]string, 0, len(ids))
+	for id := range ids {
+		result = append(result, id)
 	}
 
 	sort.Strings(result)

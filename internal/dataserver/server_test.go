@@ -182,3 +182,43 @@ func TestVerifyCommands(t *testing.T) {
 		t.Fatalf("verify_all summary missing corruption: %+v", allResp.VerificationSummary)
 	}
 }
+
+func TestVerifyAllDetectsChecksumOnlyBlock(t *testing.T) {
+	srv := newTestServer(t)
+	data := base64.StdEncoding.EncodeToString([]byte("verify"))
+	req := protocol.DataServerRequest{BlockID: "ghost", Data: data}
+
+	if resp := srv.store(req); resp.Status != "ok" {
+		t.Fatalf("store failed: %+v", resp)
+	}
+
+	if err := os.Remove(srv.blockPath("ghost")); err != nil {
+		t.Fatalf("remove block: %v", err)
+	}
+
+	resp := srv.verifyAllCommand()
+	if resp.Status != "ok" {
+		t.Fatalf("verify_all failed: %+v", resp)
+	}
+
+	summary := resp.VerificationSummary
+	if summary == nil {
+		t.Fatal("missing verification summary")
+	}
+
+	if summary.TotalBlocks != 1 {
+		t.Fatalf("expected 1 block, got %+v", summary)
+	}
+
+	if summary.UnhealthyBlocks != 1 {
+		t.Fatalf("expected unhealthy block count, got %+v", summary)
+	}
+
+	if len(summary.CorruptedBlocks) != 1 {
+		t.Fatalf("expected corrupted block entry, got %+v", summary)
+	}
+
+	if summary.CorruptedBlocks[0].Error != "block not found" {
+		t.Fatalf("unexpected error: %+v", summary.CorruptedBlocks[0])
+	}
+}

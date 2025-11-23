@@ -86,6 +86,7 @@ func (a *dataIntegrityAuditor) verifyAndRepair(addr string) {
 	if err != nil {
 		a.server.recordVerification(addr, nil, err)
 		log.Printf("metadata: verify %s failed: %v", addr, err)
+
 		return
 	}
 

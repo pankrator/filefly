@@ -15,7 +15,11 @@ func main() {
 	dataServers := flag.String("data-servers", ":8081", "comma separated list of data server addresses")
 	metadataFile := flag.String("metadata-file", "metadata.json", "path to persist metadata snapshots")
 	persistInterval := flag.Duration("persist-interval", 30*time.Second, "how often to persist metadata")
-	integrityInterval := flag.Duration("integrity-interval", 5*time.Minute, "how often to verify data servers (<=0 disables)")
+	integrityInterval := flag.Duration(
+		"integrity-interval",
+		5*time.Minute,
+		"how often to verify data servers (<=0 disables)",
+	)
 
 	flag.Parse()
 

@@ -20,6 +20,8 @@ type Server struct {
 	addr        string
 	blockSize   int
 	dataServers []string
+	advertised  map[string]string
+	internal    map[string]string
 	persistFreq time.Duration
 
 	selector   *roundRobinSelector
@@ -34,15 +36,32 @@ type Server struct {
 }
 
 // New creates a metadata server instance.
-func New(addr string, blockSize int, dataServers []string, persistPath string, persistFreq time.Duration, integrityInterval time.Duration) *Server {
+func New(
+	addr string,
+	blockSize int,
+	dataServers []string,
+	persistPath string,
+	persistFreq time.Duration,
+	integrityInterval time.Duration,
+) *Server {
 	selector := newRoundRobinSelector(dataServers)
 	client := newDataServerClient(replicaFetchTimeout)
+
+	advertised := make(map[string]string, len(dataServers))
+	internal := make(map[string]string, len(dataServers))
+
+	for _, addr := range dataServers {
+		advertised[addr] = addr
+		internal[addr] = addr
+	}
 
 	srv := &Server{
 		addr:        addr,
 		blockSize:   blockSize,
 		dataServers: append([]string(nil), dataServers...),
 		persistFreq: persistFreq,
+		advertised:  advertised,
+		internal:    internal,
 		selector:    selector,
 		planner:     newBlockPlanner(blockSize, selector),
 		store:       newMetadataStore(),
@@ -184,7 +203,7 @@ func (s *Server) storeFile(req protocol.MetadataRequest) protocol.MetadataRespon
 		len(meta.Blocks),
 		meta.Replicas)
 
-	return protocol.MetadataResponse{Status: "ok", Metadata: meta}
+	return protocol.MetadataResponse{Status: "ok", Metadata: s.advertiseMetadata(meta)}
 }
 
 func (s *Server) planFile(name string, req protocol.MetadataRequest) (*protocol.FileMetadata, error) {
@@ -206,7 +225,7 @@ func (s *Server) completeFile(req protocol.MetadataRequest) protocol.MetadataRes
 		return protocol.MetadataResponse{Status: "error", Error: "missing metadata"}
 	}
 
-	meta := *req.Metadata
+	meta := s.internalizeMetadata(*req.Metadata)
 	if meta.Name == "" {
 		if req.FileName != "" {
 			meta.Name = req.FileName
@@ -225,7 +244,7 @@ func (s *Server) completeFile(req protocol.MetadataRequest) protocol.MetadataRes
 
 	log.Printf("metadata: stored metadata for %s (%d blocks)", meta.Name, len(meta.Blocks))
 
-	return protocol.MetadataResponse{Status: "ok", Metadata: &meta}
+	return protocol.MetadataResponse{Status: "ok", Metadata: s.advertiseMetadata(&meta)}
 }
 
 func validateMetadata(meta protocol.FileMetadata) error {
@@ -296,7 +315,11 @@ func (s *Server) fetchFile(req protocol.MetadataRequest) protocol.MetadataRespon
 		return protocol.MetadataResponse{Status: "error", Error: err.Error()}
 	}
 
-	return protocol.MetadataResponse{Status: "ok", Data: base64.StdEncoding.EncodeToString(data), Metadata: meta}
+	return protocol.MetadataResponse{
+		Status:   "ok",
+		Data:     base64.StdEncoding.EncodeToString(data),
+		Metadata: s.advertiseMetadata(meta),
+	}
 }
 
 func (s *Server) getMetadata(req protocol.MetadataRequest) protocol.MetadataResponse {
@@ -311,11 +334,11 @@ func (s *Server) getMetadata(req protocol.MetadataRequest) protocol.MetadataResp
 
 	copy := meta
 
-	return protocol.MetadataResponse{Status: "ok", Metadata: &copy}
+	return protocol.MetadataResponse{Status: "ok", Metadata: s.advertiseMetadata(&copy)}
 }
 
 func (s *Server) listFilesResponse() protocol.MetadataResponse {
-	return protocol.MetadataResponse{Status: "ok", Files: s.store.List()}
+	return protocol.MetadataResponse{Status: "ok", Files: s.advertiseFiles(s.store.List())}
 }
 
 func (s *Server) deleteFile(req protocol.MetadataRequest) protocol.MetadataResponse {
@@ -363,7 +386,9 @@ func (s *Server) registerDataServer(req protocol.MetadataRequest) protocol.Metad
 		return protocol.MetadataResponse{Status: "error", Error: "missing data_server_addr"}
 	}
 
-	added := s.ensureDataServer(addr)
+	advertised := strings.TrimSpace(req.AdvertisedAddr)
+
+	added := s.ensureDataServer(addr, advertised)
 
 	if s.health != nil {
 		s.health.CheckNow(addr)
@@ -377,7 +402,7 @@ func (s *Server) registerDataServer(req protocol.MetadataRequest) protocol.Metad
 }
 
 func (s *Server) verifyDataServer(req protocol.MetadataRequest) protocol.MetadataResponse {
-	addr := strings.TrimSpace(req.DataServerAddr)
+	addr := s.internalAddress(strings.TrimSpace(req.DataServerAddr))
 	if addr == "" {
 		return protocol.MetadataResponse{Status: "error", Error: "missing data_server_addr"}
 	}
@@ -404,38 +429,42 @@ func (s *Server) verifyDataServer(req protocol.MetadataRequest) protocol.Metadat
 	return protocol.MetadataResponse{Status: "ok", Servers: []protocol.DataServerHealth{health}}
 }
 
-func (s *Server) ensureDataServer(addr string) bool {
+func (s *Server) ensureDataServer(internalAddr, advertisedAddr string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.setAdvertisedMapping(internalAddr, advertisedAddr)
+
 	for _, existing := range s.dataServers {
-		if existing == addr {
+		if existing == internalAddr {
 			if s.health != nil {
-				s.health.EnsureServer(addr)
+				s.health.EnsureServer(internalAddr)
 			}
 
 			return false
 		}
 	}
 
-	s.dataServers = append(s.dataServers, addr)
+	s.dataServers = append(s.dataServers, internalAddr)
 	if s.selector != nil {
 		s.selector.SetServers(s.dataServers)
 	}
 
 	if s.health != nil {
-		s.health.EnsureServer(addr)
+		s.health.EnsureServer(internalAddr)
 	}
 
 	return true
 }
 
 func (s *Server) isKnownDataServer(addr string) bool {
+	internalAddr := s.internalAddress(addr)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, existing := range s.dataServers {
-		if existing == addr {
+		if existing == internalAddr {
 			return true
 		}
 	}
@@ -450,12 +479,139 @@ func (s *Server) dataServersSnapshot() []string {
 	return append([]string(nil), s.dataServers...)
 }
 
+func (s *Server) setAdvertisedMapping(internalAddr, advertisedAddr string) {
+	if internalAddr == "" {
+		return
+	}
+
+	if advertisedAddr == "" {
+		advertisedAddr = internalAddr
+	}
+
+	if s.advertised == nil {
+		s.advertised = make(map[string]string)
+	}
+
+	if s.internal == nil {
+		s.internal = make(map[string]string)
+	}
+
+	if existing, ok := s.advertised[internalAddr]; ok && existing != advertisedAddr {
+		delete(s.internal, existing)
+	}
+
+	s.advertised[internalAddr] = advertisedAddr
+	s.internal[advertisedAddr] = internalAddr
+}
+
+func (s *Server) advertisedAddress(internalAddr string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if advertised, ok := s.advertised[internalAddr]; ok && advertised != "" {
+		return advertised
+	}
+
+	return internalAddr
+}
+
+func (s *Server) internalAddress(advertisedAddr string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if internalAddr, ok := s.internal[advertisedAddr]; ok && internalAddr != "" {
+		return internalAddr
+	}
+
+	return advertisedAddr
+}
+
 func (s *Server) recordVerification(addr string, summary *protocol.BlockVerificationSummary, err error) {
 	if s.health == nil {
 		return
 	}
 
 	s.health.RecordVerification(addr, summary, err)
+}
+
+func (s *Server) advertiseMetadata(meta *protocol.FileMetadata) *protocol.FileMetadata {
+	if meta == nil {
+		return nil
+	}
+
+	copy := *meta
+	copy.Blocks = make([]protocol.BlockRef, len(meta.Blocks))
+
+	for i, block := range meta.Blocks {
+		copy.Blocks[i] = s.advertiseBlock(block)
+	}
+
+	return &copy
+}
+
+func (s *Server) internalizeMetadata(meta protocol.FileMetadata) protocol.FileMetadata {
+	internal := meta
+	internal.Blocks = make([]protocol.BlockRef, len(meta.Blocks))
+
+	for i, block := range meta.Blocks {
+		internal.Blocks[i] = s.internalizeBlock(block)
+	}
+
+	return internal
+}
+
+func (s *Server) advertiseBlock(block protocol.BlockRef) protocol.BlockRef {
+	advertised := block
+
+	if block.Replicas != nil {
+		advertised.Replicas = make([]protocol.BlockReplica, len(block.Replicas))
+		for i, replica := range block.Replicas {
+			advertised.Replicas[i] = protocol.BlockReplica{DataServer: s.advertisedAddress(replica.DataServer)}
+		}
+	}
+
+	if block.DataServer != "" {
+		advertised.DataServer = s.advertisedAddress(block.DataServer)
+	}
+
+	return advertised
+}
+
+func (s *Server) internalizeBlock(block protocol.BlockRef) protocol.BlockRef {
+	internal := block
+
+	if block.Replicas != nil {
+		internal.Replicas = make([]protocol.BlockReplica, len(block.Replicas))
+		for i, replica := range block.Replicas {
+			internal.Replicas[i] = protocol.BlockReplica{DataServer: s.internalAddress(replica.DataServer)}
+		}
+	}
+
+	if block.DataServer != "" {
+		internal.DataServer = s.internalAddress(block.DataServer)
+	}
+
+	return internal
+}
+
+func (s *Server) advertiseFiles(files []protocol.FileMetadata) []protocol.FileMetadata {
+	copies := make([]protocol.FileMetadata, 0, len(files))
+	for i := range files {
+		copies = append(copies, *s.advertiseMetadata(&files[i]))
+	}
+
+	return copies
+}
+
+func (s *Server) advertiseHealth(servers []protocol.DataServerHealth) []protocol.DataServerHealth {
+	advertised := make([]protocol.DataServerHealth, len(servers))
+
+	for i, server := range servers {
+		advertised[i] = server
+		advertised[i].Address = s.advertisedAddress(server.Address)
+	}
+
+	return advertised
 }
 
 func (s *Server) repairReplica(targetAddr, blockID string) error {
@@ -534,7 +690,7 @@ func (s *Server) listDataServersResponse() protocol.MetadataResponse {
 
 	s.attachVerification(servers)
 
-	return protocol.MetadataResponse{Status: "ok", Servers: servers}
+	return protocol.MetadataResponse{Status: "ok", Servers: s.advertiseHealth(servers)}
 }
 
 func (s *Server) attachVerification(servers []protocol.DataServerHealth) {

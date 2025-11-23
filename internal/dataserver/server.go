@@ -42,6 +42,7 @@ const (
 // allowlist are rejected to avoid initiating arbitrary outbound connections.
 func WithAllowedRepairSources(sources []string) Option {
 	allowed := make(map[string]struct{}, len(sources))
+
 	for _, src := range sources {
 		if src != "" {
 			allowed[src] = struct{}{}
@@ -286,6 +287,7 @@ func (s *Server) isAllowedRepairSource(addr string) bool {
 	}
 
 	_, ok := s.allowedRepairSources[addr]
+
 	return ok
 }
 

@@ -140,8 +140,11 @@ func (c *dataServerClient) RepairBlock(targetAddr, blockID, sourceAddr string) e
 		return fmt.Errorf("repair requires target, block_id, and source")
 	}
 
-	req := protocol.DataServerRequest{Command: "repair_block", BlockID: blockID, SourceServer: sourceAddr}
-	resp, err := c.request(targetAddr, req)
+	resp, err := c.request(targetAddr, protocol.DataServerRequest{
+		Command:      "repair_block",
+		BlockID:      blockID,
+		SourceServer: sourceAddr,
+	})
 	if err != nil {
 		return err
 	}

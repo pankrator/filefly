@@ -1,0 +1,76 @@
+name: Build and Deploy FileFly
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build server binaries
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          declare -a targets=(dataserver metadataserver uiserver)
+          for target in "${targets[@]}"; do
+            echo "Building ${target}"
+            GOOS=linux GOARCH=amd64 go build -o "build/${target}" "./cmd/${target}"
+          done
+          ls -lh build
+
+      - name: Archive deploy payload
+        run: |
+          tar czf filefly-artifacts.tar.gz build deploy/systemd
+          ls -lh filefly-artifacts.tar.gz
+
+      - name: Upload artifacts to the deploy target
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          source: "filefly-artifacts.tar.gz"
+          target: ${{ env.DEPLOY_TARGET_DIR }}
+
+      - name: Install binaries and restart services
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            ARCHIVE=${{ env.DEPLOY_TARGET_DIR }}/filefly-artifacts.tar.gz
+            RELEASE_DIR=${{ env.DEPLOY_TARGET_DIR }}/current
+            BIN_DIR=/home/ec2-user/bin
+            mkdir -p "$RELEASE_DIR" "$BIN_DIR"
+            mkdir -p /var/lib/filefly/dataserver /var/lib/filefly/metadataserver /var/lib/filefly/uiserver
+            tar xzf "$ARCHIVE" -C "$RELEASE_DIR" --strip-components=0
+            services=(filefly-dataserver filefly-metadataserver filefly-uiserver)
+            for svc in "${services[@]}"; do
+              sudo systemctl stop "$svc" || true
+            done
+            cp "$RELEASE_DIR"/build/* "$BIN_DIR"/
+
+            sudo chmod 755 "$BIN_DIR"/*
+            sudo cp "$RELEASE_DIR"/deploy/systemd/filefly-*.service /etc/systemd/system/
+            sudo chmod 644 /etc/systemd/system/filefly-*.service
+            sudo systemctl daemon-reload
+            for svc in "${services[@]}"; do
+              sudo systemctl enable "$svc"
+              sudo systemctl restart "$svc"
+              sudo systemctl status --no-pager "$svc"
+            done

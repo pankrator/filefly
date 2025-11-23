@@ -25,6 +25,8 @@ type Server struct {
 
 	verifyInterval time.Duration
 	verifier       *blockVerifier
+
+	allowedRepairSources map[string]struct{}
 }
 
 // Option customizes the data server.
@@ -34,6 +36,22 @@ const (
 	defaultVerifyInterval = 5 * time.Minute
 	peerRepairTimeout     = 5 * time.Second
 )
+
+// WithAllowedRepairSources restricts which peer addresses can be used as sources
+// when repairing corrupted blocks. Requests referencing a source outside this
+// allowlist are rejected to avoid initiating arbitrary outbound connections.
+func WithAllowedRepairSources(sources []string) Option {
+	allowed := make(map[string]struct{}, len(sources))
+	for _, src := range sources {
+		if src != "" {
+			allowed[src] = struct{}{}
+		}
+	}
+
+	return func(s *Server) {
+		s.allowedRepairSources = allowed
+	}
+}
 
 // WithVerificationInterval adjusts how often the background verifier scans stored blocks.
 // A zero or negative interval disables the background worker.
@@ -240,6 +258,10 @@ func (s *Server) repairBlock(req protocol.DataServerRequest) protocol.DataServer
 		return protocol.DataServerResponse{Status: "error", Error: "missing source_server"}
 	}
 
+	if !s.isAllowedRepairSource(req.SourceServer) {
+		return protocol.DataServerResponse{Status: "error", Error: "untrusted repair source"}
+	}
+
 	data, err := s.fetchBlockFromPeer(req.SourceServer, req.BlockID)
 	if err != nil {
 		return protocol.DataServerResponse{Status: "error", Error: err.Error()}
@@ -256,6 +278,15 @@ func (s *Server) repairBlock(req protocol.DataServerRequest) protocol.DataServer
 	log.Printf("dataserver: repaired block %s using %s", req.BlockID, req.SourceServer)
 
 	return protocol.DataServerResponse{Status: "ok"}
+}
+
+func (s *Server) isAllowedRepairSource(addr string) bool {
+	if len(s.allowedRepairSources) == 0 {
+		return false
+	}
+
+	_, ok := s.allowedRepairSources[addr]
+	return ok
 }
 
 func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerResponse {

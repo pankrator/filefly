@@ -194,6 +194,28 @@ func (m *dataHealthMonitor) CheckNow(addr string) {
 	go m.check(addr)
 }
 
+func (m *dataHealthMonitor) RecordVerification(addr string, summary *protocol.BlockVerificationSummary, err error) {
+	if m == nil || addr == "" {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	status := m.statuses[addr]
+	status.Address = addr
+
+	if err != nil {
+		status.Verification = nil
+		status.VerificationError = err.Error()
+	} else {
+		status.Verification = summary
+		status.VerificationError = ""
+	}
+
+	m.statuses[addr] = status
+}
+
 func (m *dataHealthMonitor) snapshotServers() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

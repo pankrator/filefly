@@ -8,11 +8,11 @@ import (
 	"filefly/internal/protocol"
 )
 
-func newTestServer(t *testing.T) *Server {
+func newTestServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 	dir := t.TempDir()
 
-	srv, err := New(":0", dir)
+	srv, err := New(":0", dir, opts...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -135,6 +135,19 @@ func TestDeleteRemovesChecksum(t *testing.T) {
 
 	if _, err := os.Stat(srv.checksumPath("block-4")); !os.IsNotExist(err) {
 		t.Fatalf("checksum file still exists: %v", err)
+	}
+}
+
+func TestRepairBlockRejectsUntrustedSource(t *testing.T) {
+	srv := newTestServer(t, WithAllowedRepairSources([]string{"trusted:1234"}))
+
+	resp := srv.repairBlock(protocol.DataServerRequest{BlockID: "block-1", SourceServer: "evil.internal:80"})
+	if resp.Status != "error" {
+		t.Fatalf("expected error, got %+v", resp)
+	}
+
+	if resp.Error != "untrusted repair source" {
+		t.Fatalf("unexpected error: %s", resp.Error)
 	}
 }
 

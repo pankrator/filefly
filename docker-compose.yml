@@ -4,7 +4,12 @@ services:
   dataserver1:
     image: golang:1.21
     working_dir: /app
-    command: go run ./cmd/dataserver --addr :9101 --storage_dir /blocks --verify-interval 2m
+    command: >-
+      go run ./cmd/dataserver
+      --addr :9101
+      --storage_dir /blocks
+      --verify-interval 2m
+      --allowed-repair-sources dataserver1:9101,dataserver2:9102
     volumes:
       - .:/app
       - blocks1:/blocks # stores blocks and CRC checksum files
@@ -14,7 +19,12 @@ services:
   dataserver2:
     image: golang:1.21
     working_dir: /app
-    command: go run ./cmd/dataserver --addr :9102 --storage_dir /blocks --verify-interval 2m
+    command: >-
+      go run ./cmd/dataserver
+      --addr :9102
+      --storage_dir /blocks
+      --verify-interval 2m
+      --allowed-repair-sources dataserver1:9101,dataserver2:9102
     volumes:
       - .:/app
       - blocks2:/blocks # stores blocks and CRC checksum files
@@ -32,6 +42,7 @@ services:
       --data-servers dataserver1:9101,dataserver2:9102
       --metadata-file /metadata/metadata.json
       --persist-interval 30s
+      --integrity-interval 2m
     volumes:
       - .:/app
       - metadata:/metadata

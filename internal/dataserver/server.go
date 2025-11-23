@@ -25,12 +25,33 @@ type Server struct {
 
 	verifyInterval time.Duration
 	verifier       *blockVerifier
+
+	allowedRepairSources map[string]struct{}
 }
 
 // Option customizes the data server.
 type Option func(*Server)
 
-const defaultVerifyInterval = 5 * time.Minute
+const (
+	defaultVerifyInterval = 5 * time.Minute
+	peerRepairTimeout     = 5 * time.Second
+)
+
+// WithAllowedRepairSources restricts which peer addresses can be used as sources
+// when repairing corrupted blocks. Requests referencing a source outside this
+// allowlist are rejected to avoid initiating arbitrary outbound connections.
+func WithAllowedRepairSources(sources []string) Option {
+	allowed := make(map[string]struct{}, len(sources))
+	for _, src := range sources {
+		if src != "" {
+			allowed[src] = struct{}{}
+		}
+	}
+
+	return func(s *Server) {
+		s.allowedRepairSources = allowed
+	}
+}
 
 // WithVerificationInterval adjusts how often the background verifier scans stored blocks.
 // A zero or negative interval disables the background worker.
@@ -136,6 +157,8 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp = s.verifyAllCommand()
 		case "verification_status":
 			resp = s.verificationStatus()
+		case "repair_block":
+			resp = s.repairBlock(req)
 		default:
 			resp = protocol.DataServerResponse{Status: "error", Error: "unknown command"}
 		}
@@ -197,25 +220,73 @@ func (s *Server) store(req protocol.DataServerRequest) protocol.DataServerRespon
 		return protocol.DataServerResponse{Status: "error", Error: "invalid base64 data"}
 	}
 
-	path := s.blockPath(req.BlockID)
-	checksumPath := s.checksumPath(req.BlockID)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("write block: %v", err)}
-	}
-
-	sum := crc32.ChecksumIEEE(data)
-	if err := writeChecksum(checksumPath, sum); err != nil {
-		_ = os.Remove(path)
-		return protocol.DataServerResponse{Status: "error", Error: fmt.Sprintf("write checksum: %v", err)}
+	if err := s.persistBlock(req.BlockID, data); err != nil {
+		return protocol.DataServerResponse{Status: "error", Error: err.Error()}
 	}
 
 	log.Printf("dataserver: stored block %s (%d bytes)", req.BlockID, len(data))
 
 	return protocol.DataServerResponse{Status: "ok"}
+}
+
+func (s *Server) persistBlock(blockID string, data []byte) error {
+	path := s.blockPath(blockID)
+	checksumPath := s.checksumPath(blockID)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write block: %w", err)
+	}
+
+	sum := crc32.ChecksumIEEE(data)
+	if err := writeChecksum(checksumPath, sum); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("write checksum: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) repairBlock(req protocol.DataServerRequest) protocol.DataServerResponse {
+	if req.BlockID == "" {
+		return protocol.DataServerResponse{Status: "error", Error: "missing block_id"}
+	}
+
+	if req.SourceServer == "" {
+		return protocol.DataServerResponse{Status: "error", Error: "missing source_server"}
+	}
+
+	if !s.isAllowedRepairSource(req.SourceServer) {
+		return protocol.DataServerResponse{Status: "error", Error: "untrusted repair source"}
+	}
+
+	data, err := s.fetchBlockFromPeer(req.SourceServer, req.BlockID)
+	if err != nil {
+		return protocol.DataServerResponse{Status: "error", Error: err.Error()}
+	}
+
+	if err := s.persistBlock(req.BlockID, data); err != nil {
+		return protocol.DataServerResponse{Status: "error", Error: err.Error()}
+	}
+
+	if s.verifier != nil {
+		go s.verifier.VerifyBlock(req.BlockID)
+	}
+
+	log.Printf("dataserver: repaired block %s using %s", req.BlockID, req.SourceServer)
+
+	return protocol.DataServerResponse{Status: "ok"}
+}
+
+func (s *Server) isAllowedRepairSource(addr string) bool {
+	if len(s.allowedRepairSources) == 0 {
+		return false
+	}
+
+	_, ok := s.allowedRepairSources[addr]
+	return ok
 }
 
 func (s *Server) retrieve(req protocol.DataServerRequest) protocol.DataServerResponse {
@@ -308,4 +379,45 @@ func readChecksum(path string) (uint32, error) {
 	}
 
 	return binary.BigEndian.Uint32(data), nil
+}
+
+func (s *Server) fetchBlockFromPeer(addr, blockID string) ([]byte, error) {
+	dialer := &net.Dialer{Timeout: peerRepairTimeout}
+
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("connect to peer %s: %w", addr, err)
+	}
+	defer conn.Close() //nolint:errcheck
+
+	_ = conn.SetDeadline(time.Now().Add(peerRepairTimeout))
+
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(bufio.NewReader(conn))
+
+	req := protocol.DataServerRequest{Command: "retrieve", BlockID: blockID}
+	if err := enc.Encode(req); err != nil {
+		return nil, fmt.Errorf("request block %s from %s: %w", blockID, addr, err)
+	}
+
+	var resp protocol.DataServerResponse
+	if err := dec.Decode(&resp); err != nil {
+		return nil, fmt.Errorf("decode response from %s: %w", addr, err)
+	}
+
+	if resp.Status != "ok" {
+		msg := resp.Error
+		if msg == "" {
+			msg = "peer returned error"
+		}
+
+		return nil, fmt.Errorf("peer %s: %s", addr, msg)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decode peer data: %w", err)
+	}
+
+	return data, nil
 }

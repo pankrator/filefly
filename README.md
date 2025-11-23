@@ -208,6 +208,10 @@ every deploy.
   servers it knows about. Healthy servers are checked on a tight loop, while
   unhealthy servers are retried periodically so they can be marked healthy again
   as soon as they respond to a ping.
+* **integrity-interval** – frequency at which the metadata server asks each data
+  server to run a full verification and automatically repairs corrupted blocks
+  by instructing a replica to download the data from a healthy peer. Set to
+  `0s` to disable background verification/repairs.
 
 This simple implementation was built for educational purposes. It should be
 straightforward to extend the servers with authentication, replication, or other

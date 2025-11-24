@@ -17,12 +17,13 @@ import (
 
 // Server keeps metadata for files and distributes blocks to data servers.
 type Server struct {
-	addr        string
-	blockSize   int
-	dataServers []string
-	advertised  map[string]string
-	internal    map[string]string
-	persistFreq time.Duration
+	addr                 string
+	blockSize            int
+	dataServers          []string
+	advertised           map[string]string
+	internal             map[string]string
+	persistFreq          time.Duration
+	configuredAdvertised []string
 
 	selector   *roundRobinSelector
 	planner    *blockPlanner
@@ -40,39 +41,67 @@ func New(
 	addr string,
 	blockSize int,
 	dataServers []string,
+	advertisedDataServers []string,
 	persistPath string,
 	persistFreq time.Duration,
 	integrityInterval time.Duration,
-) *Server {
+) (*Server, error) {
 	selector := newRoundRobinSelector(dataServers)
 	client := newDataServerClient(replicaFetchTimeout)
 
-	advertised := make(map[string]string, len(dataServers))
-	internal := make(map[string]string, len(dataServers))
-
-	for _, addr := range dataServers {
-		advertised[addr] = addr
-		internal[addr] = addr
+	advertised, internal, err := buildAdvertisedMappings(dataServers, advertisedDataServers)
+	if err != nil {
+		return nil, err
 	}
 
 	srv := &Server{
-		addr:        addr,
-		blockSize:   blockSize,
-		dataServers: append([]string(nil), dataServers...),
-		persistFreq: persistFreq,
-		advertised:  advertised,
-		internal:    internal,
-		selector:    selector,
-		planner:     newBlockPlanner(blockSize, selector),
-		store:       newMetadataStore(),
-		persister:   newDiskPersister(persistPath),
-		dataClient:  client,
-		health:      newDataHealthMonitor(dataServers, client, defaultHealthCheckInterval),
+		addr:                 addr,
+		blockSize:            blockSize,
+		dataServers:          append([]string(nil), dataServers...),
+		advertised:           advertised,
+		internal:             internal,
+		persistFreq:          persistFreq,
+		configuredAdvertised: append([]string(nil), advertisedDataServers...),
+		selector:             selector,
+		planner:              newBlockPlanner(blockSize, selector),
+		store:                newMetadataStore(),
+		persister:            newDiskPersister(persistPath),
+		dataClient:           client,
+		health:               newDataHealthMonitor(dataServers, client, defaultHealthCheckInterval),
 	}
 
 	srv.integrity = newDataIntegrityAuditor(srv, integrityInterval)
 
-	return srv
+	return srv, nil
+}
+
+func buildAdvertisedMappings(
+	dataServers []string,
+	advertisedDataServers []string,
+) (map[string]string, map[string]string, error) {
+	if len(advertisedDataServers) > 0 && len(advertisedDataServers) != len(dataServers) {
+		return nil, nil, fmt.Errorf(
+			"metadata server requires the same number of advertised data servers as internal data servers (have %d, want %d)",
+			len(advertisedDataServers),
+			len(dataServers),
+		)
+	}
+
+	advertised := make(map[string]string, len(dataServers))
+	internal := make(map[string]string, len(dataServers))
+
+	for i, addr := range dataServers {
+		advertisedAddr := addr
+
+		if len(advertisedDataServers) > 0 && advertisedDataServers[i] != "" {
+			advertisedAddr = advertisedDataServers[i]
+		}
+
+		advertised[addr] = advertisedAddr
+		internal[advertisedAddr] = addr
+	}
+
+	return advertised, internal, nil
 }
 
 // Listen starts the server.

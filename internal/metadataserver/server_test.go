@@ -9,14 +9,18 @@ import (
 )
 
 func TestAdvertisedMetadataUsesPublicAddresses(t *testing.T) {
-	server := New(
+	server, err := New(
 		":0",
 		1024,
 		[]string{"10.0.0.5:9000"},
+		nil,
 		filepath.Join(t.TempDir(), "metadata.json"),
 		time.Minute,
 		0,
 	)
+	if err != nil {
+		t.Fatalf("metadata server init failed: %v", err)
+	}
 
 	server.setAdvertisedMapping("10.0.0.5:9000", "203.0.113.5:9000")
 
@@ -48,14 +52,18 @@ func TestAdvertisedMetadataUsesPublicAddresses(t *testing.T) {
 }
 
 func TestCompleteFilePersistsInternalAddresses(t *testing.T) {
-	server := New(
+	server, err := New(
 		":0",
 		1024,
+		nil,
 		nil,
 		filepath.Join(t.TempDir(), "metadata.json"),
 		time.Minute,
 		0,
 	)
+	if err != nil {
+		t.Fatalf("metadata server init failed: %v", err)
+	}
 
 	registerResp := server.registerDataServer(protocol.MetadataRequest{
 		DataServerAddr: "10.0.0.8:9100",

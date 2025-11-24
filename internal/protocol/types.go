@@ -32,6 +32,7 @@ type MetadataRequest struct {
 	Replicas       int           `json:"replicas,omitempty"`
 	Metadata       *FileMetadata `json:"metadata,omitempty"`
 	DataServerAddr string        `json:"data_server_addr,omitempty"`
+	AdvertisedAddr string        `json:"advertised_addr,omitempty"`
 }
 
 // BlockReplica describes a copy of a block stored on a specific data server.

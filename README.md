@@ -195,7 +195,12 @@ every deploy.
 * **block-size** – size of the chunks the metadata server creates when building
   upload plans.
 * **data-servers** – comma-separated list of `host:port` pairs for data servers.
-  The metadata server picks targets in a simple round-robin order.
+  The metadata server picks targets in a simple round-robin order and reaches
+  these addresses directly.
+* **advertised-data-servers** – optional comma-separated list of `host:port`
+  pairs matching the order of `data-servers`. When provided, the metadata
+  server will advertise these public addresses to clients while persisting and
+  communicating with the private addresses.
 * **storage_dir** – directory used by each data server process to persist block
   files. Defaults to `./blocks` when running `cmd/dataserver`.
 * **metadata-file** – optional path where the metadata server periodically writes

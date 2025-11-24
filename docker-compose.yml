@@ -40,6 +40,7 @@ services:
       --addr :9100
       --block-size 1048576
       --data-servers dataserver1:9101,dataserver2:9102
+      --advertised-data-servers dataserver1:9101,dataserver2:9102
       --metadata-file /metadata/metadata.json
       --persist-interval 30s
       --integrity-interval 2m

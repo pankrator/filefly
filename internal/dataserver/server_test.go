@@ -8,6 +8,11 @@ import (
 	"filefly/internal/protocol"
 )
 
+const (
+	statusError          = "error"
+	checksumMismatchText = "checksum mismatch"
+)
+
 func newTestServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -78,11 +83,11 @@ func TestRetrieveChecksumMismatch(t *testing.T) {
 	}
 
 	resp := srv.retrieve(protocol.DataServerRequest{BlockID: "block-2"})
-	if resp.Status != "error" {
+	if resp.Status != statusError {
 		t.Fatalf("expected error, got %+v", resp)
 	}
 
-	if resp.Error != "checksum mismatch" {
+	if resp.Error != checksumMismatchText {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
 }
@@ -104,7 +109,7 @@ func TestRetrieveMissingChecksum(t *testing.T) {
 	}
 
 	resp := srv.retrieve(protocol.DataServerRequest{BlockID: "block-3"})
-	if resp.Status != "error" {
+	if resp.Status != statusError {
 		t.Fatalf("expected error, got %+v", resp)
 	}
 
@@ -142,7 +147,7 @@ func TestRepairBlockRejectsUntrustedSource(t *testing.T) {
 	srv := newTestServer(t, WithAllowedRepairSources([]string{"trusted:1234"}))
 
 	resp := srv.repairBlock(protocol.DataServerRequest{BlockID: "block-1", SourceServer: "evil.internal:80"})
-	if resp.Status != "error" {
+	if resp.Status != statusError {
 		t.Fatalf("expected error, got %+v", resp)
 	}
 
@@ -182,7 +187,7 @@ func TestVerifyCommands(t *testing.T) {
 		t.Fatalf("expected unhealthy result: %+v", resp.Verifications[0])
 	}
 
-	if resp.Verifications[0].Error != "checksum mismatch" {
+	if resp.Verifications[0].Error != checksumMismatchText {
 		t.Fatalf("unexpected error: %s", resp.Verifications[0].Error)
 	}
 

@@ -11,6 +11,8 @@ jobs:
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+      METADATA_PRIVATE_DATA_SERVERS: ${{ secrets.METADATA_PRIVATE_DATA_SERVERS }}
+      METADATA_PUBLIC_DATA_SERVERS: ${{ secrets.METADATA_PUBLIC_DATA_SERVERS }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -63,6 +65,12 @@ jobs:
             for svc in "${services[@]}"; do
               sudo systemctl stop "$svc" || true
             done
+            if [ -n "${{ env.METADATA_PRIVATE_DATA_SERVERS }}" ]; then
+              sudo systemctl set-environment FILEFLY_METADATASERVER_DATA_SERVERS="${{ env.METADATA_PRIVATE_DATA_SERVERS }}"
+            fi
+            if [ -n "${{ env.METADATA_PUBLIC_DATA_SERVERS }}" ]; then
+              sudo systemctl set-environment FILEFLY_METADATASERVER_ADVERTISED_DATA_SERVERS="${{ env.METADATA_PUBLIC_DATA_SERVERS }}"
+            fi
             cp "$RELEASE_DIR"/build/* "$BIN_DIR"/
 
             sudo chmod 755 "$BIN_DIR"/*
